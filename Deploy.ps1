@@ -15,13 +15,22 @@ param
 	[string] $ProjectPath
 )
 
-$resolveAppData = "$env:APPDATA\Blackmagic Design\DaVinci Resolve" # Current User
-$resolveFusion = "$resolveAppData\Support\Fusion"
+$resolveAppData = "$env:APPDATA/Blackmagic Design/DaVinci Resolve"							# Current User (Windows)
+#$resolveAppData = "$HOME/Library/Application Support/Blackmagic Design/DaVinci Resolve"	# Current User (macOS)
+#$resolveAppData = "$HOME/.local/share/DaVinciResolve"										# Current User (Linux)
+$resolveFusion = "$resolveAppData/Support/Fusion"
 
-if (!(Test-Path -Path $resolveFusion))
+if (Test-Path -Path $resolveAppData)
 {
-	# No "Support" folder means the target is macOS or Linux and we need another path
-	$resolveFusion = "$resolveAppData\Fusion"
+	if (!(Test-Path -Path $resolveFusion))
+	{
+		# No "Support" folder means the target is macOS or Linux and we need another path
+		$resolveFusion = "$resolveAppData/Fusion"
+	}
+}
+else
+{
+	throw "DaVinci Resolve not found"
 }
 
 function Deploy-Files
@@ -36,7 +45,7 @@ function Deploy-Files
 		[string] $Destination
 	)
 
-	Write-Host("Purging ""$Destination""...")
+	Write-Host("Purging ""$Destination*""...")
 	Remove-Item -Path $Destination* -Recurse -Force -ErrorAction:SilentlyContinue
 
 	Write-Host("Copying from ""$Source"" to ""$Destination""...")
@@ -45,5 +54,5 @@ function Deploy-Files
 	Write-Host("")
 }
 
-Deploy-Files -Source "$ProjectPath\Modules\Lua" -Destination "$resolveFusion\Modules\Lua\"
-Deploy-Files -Source "$ProjectPath\Scripts" -Destination "$resolveFusion\Scripts\"
+Deploy-Files -Source ("{0}Modules/Lua/*" -f $ProjectPath) -Destination "$resolveFusion/Modules/Lua/"
+Deploy-Files -Source ("{0}Scripts/*" -f $ProjectPath) -Destination "$resolveFusion/Scripts/"
