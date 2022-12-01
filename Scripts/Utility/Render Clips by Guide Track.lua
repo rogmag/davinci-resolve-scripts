@@ -26,21 +26,35 @@ script =
 	{
 		RENDER_PRESET = 
 		{
-			CURRENT_SETTINGS = "Current Settings",
+			CURRENT_SETTINGS = "Current settings",
 		},
 
 		FILENAME_FROM = 
 		{
-			GUIDE_TRACK_CLIP_FILENAME = "Guide Track Clip Filename",
-			GUIDE_TRACK_CLIP_NAME = "Guide Track Clip Name",
+			GUIDE_TRACK_CLIP_FILENAME = "Guide track clip filename",
+			GUIDE_TRACK_CLIP_NAME = "Guide track clip name (trimmed file extension)",
+			GUIDE_TRACK_CLIP_NAME_FILTERED = "Guide track clip name (filtered file extension)",
 			CUSTOM = "Custom",
 		},
 
 		TIMECODE_FROM = 
 		{
-			GUIDE_TRACK_CLIP = "Guide Track Clip",
+			GUIDE_TRACK_CLIP = "Guide track clip",
 			TIMELINE = "Timeline",
 			CUSTOM = "Custom",
+		},
+
+		VARIABLES =
+		{
+			CLIP_FILENAME = "%{ClipFilename}",
+			CLIP_NAME = "%{ClipName}",
+			CLIP_NAME_FILTERED = "%{ClipNameFiltered}",
+			CLIP_NUMBER = "%{ClipNumber}",
+			CURRENT_DATE = "%{CurrentDate}",
+			CURRENT_TIME = "%{CurrentTime}",
+			TRACK_NAME = "%{TrackName}",
+			TRACK_NUMBER = "%{TrackNumber}",
+			TRACK_TYPE = "%{TrackType}",
 		},
 	},
 
@@ -493,19 +507,19 @@ script =
 			if path == nil or #path == 0 then
 				return false, "Invalid path"
 			else
-				local test_filename = string.format("%sLua Script Folder Permission Validation.[%s].txt", self.ensure_separator(path), bmd.gettime())
-				local file_handle, error_message = io.open(test_filename, "w")
+				local folder_path = self.ensure_separator(path)
 
-				if error_message then
-					-- Remove the path+filename in the error message
-					error_message = error_message:gsub((test_filename..": "):gsub("([^%w])", "%%%1"), "")
-				end
-				
-				if file_handle then
-					io.close(file_handle)
-					return true, nil
+				if bmd.fileexists(folder_path) then
+					local test_folder_path = string.format("%s%s", folder_path, bmd.createuuid())
+
+					if bmd.createdir(test_folder_path) then
+						bmd.removedir(test_folder_path)
+						return true, nil
+					else
+						return false, "Write permission denied"
+					end
 				else
-					return false, error_message
+					return false, "Path not found"
 				end
 			end
 		end,
@@ -803,10 +817,16 @@ local function create_window(project, timeline)
 		StyleSheet = [[
 			QComboBox
 			{
-				padding-right: 6px;
-				padding-left: 6px;
+				padding-right: 10px;
+				padding-left: 10px;
 				min-height: 18px;
 				max-height: 18px;
+				color: rgb(146, 146, 146);
+			}
+
+			QComboBox:on
+			{
+				color: white;
 			}
 
 			QLineEdit
@@ -815,6 +835,12 @@ local function create_window(project, timeline)
 				margin-top: 1px;
 				min-height: 18px;
 				max-height: 18px;
+				color: rgb(146, 146, 146);
+			}
+
+			QLineEdit:focus
+			{
+				color: white;
 			}
 
 			QPushButton
@@ -917,6 +943,19 @@ local function create_window(project, timeline)
 					ID = "FilenameComboBox",
 					Events = { CurrentTextChanged = true },
 					FocusPolicy = { StrongFocus = true },
+					ToolTip =	[[<p><b>]]..script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME..[[</b><br />
+						If the guide track clip has a filename, it will use that. If not, it will use the clip name.
+						The file extension will be trimmed out and replaced with the default for the render settings.</p>
+
+						<p><b>]]..script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME..[[</b><br />
+						Use the clip name with the file extension trimmed out.</p>
+
+						<p><b>]]..script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED..[[</b><br />
+						Use the clip name but filter out the file extension from anywhere inside the clip name,
+						not just at the end. Useful for subclips or clips with text added after the filename.</p>
+
+						<p><b>]]..script.constants.FILENAME_FROM.CUSTOM..[[</b><br />
+						Set your own filename, with or without variables.]]
 				},
 
 				ui:Label { MinimumSize = right_column_minimum_size, MaximumSize = right_column_maximum_size },
@@ -949,14 +988,17 @@ local function create_window(project, timeline)
 					},
 					Text = script.settings.custom_filename,
 					ToolTip =	[[<p>These variables are available:</p>
-								<pre>  %{ClipFilename}</pre>
-								<pre>  %{ClipName}</pre>
-								<pre>  %{ClipNumber}</pre>
-								<pre>  %{CurrentDate} - In ISO8601 format</pre>
-								<pre>  %{CurrentTime} - In ISO8601 format</pre>
-								<pre>  %{TrackName}</pre>
-								<pre>  %{TrackNumber}</pre>
-								<pre>  %{TrackType}</pre>
+								<table cellspacing="10">
+									<tr><td><b>]]..script.constants.VARIABLES.CLIP_FILENAME..[[</b></td>     <td></td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.CLIP_NAME..[[</b></td>         <td></td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.CLIP_NAME_FILTERED..[[</b></td> <td></td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.CLIP_NUMBER..[[</b></td>       <td></td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.CURRENT_DATE..[[</b></td>      <td>In ISO8601 format</td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.CURRENT_TIME..[[</b></td>      <td>In ISO8601 format</td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.TRACK_NAME..[[</b></td>        <td></td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.TRACK_NUMBER..[[</b></td>      <td></td></tr>
+									<tr><td><b>]]..script.constants.VARIABLES.TRACK_TYPE..[[</b></td>        <td></td></tr>
+								</table>
 					]],
 				},
 
@@ -1169,6 +1211,7 @@ local function create_window(project, timeline)
 		{
 			script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME,
 			script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME,
+			script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED,
 			script.constants.FILENAME_FROM.CUSTOM
 		}
 
@@ -1291,6 +1334,21 @@ local function wait_for_user()
 end
 
 local function get_filenames(items, filename_mode, custom_filename, guide_track_settings)
+	local function replace_variable(str, variable, variable_value)
+		local v_start, v_end = str:find(variable, nil, true)
+
+		if v_start then
+			return table.concat
+			{
+				str:sub(1, v_start - 1),
+				variable_value,
+				str:sub(v_end + 1)
+			}
+		else
+			return str
+		end
+	end
+
 	local function sanitize_filename(filename)
 		-- Sanitizes a filename in case it came from a clip name
 
@@ -1306,7 +1364,7 @@ local function get_filenames(items, filename_mode, custom_filename, guide_track_
 			gsub("<", " "):
 			gsub(">", " ")
 
-		-- In case we're writing to a fat32 volume or UNIX file system
+		-- In case we're writing to a fat32 volume that might be used elsewhere or a UNIX file system
 		local reserved_words =
 		{
 			"null", "NULL",
@@ -1324,7 +1382,36 @@ local function get_filenames(items, filename_mode, custom_filename, guide_track_
 			end
 		end
 
-		return sanitized_filename --TODO: Trim trailing spaces
+		-- Trim spaces
+		return sanitized_filename:gsub("^%s+", ""):gsub("%s+$", "")
+	end
+
+	local function get_clip_name(track_type, item, media_pool_item, filename_mode)
+		if track_type == "subtitle" then
+			return "Subtitle"
+		else
+			local item_name = item:GetName()
+		
+			-- Trim or filter the item name file extension
+			if media_pool_item and #media_pool_item:GetClipProperty("File Path") > 0 then
+				local media_filename = media_pool_item:GetClipProperty("File Name")
+				local media_filename_without_extension = ( { splitpath(media_filename) } )[2]
+
+				if filename_mode == script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME then
+					item_name = media_filename_without_extension
+				else
+					if item_name:sub(-#media_filename) == media_filename then -- item_name ends with media_filename
+						-- Trim the filename extension
+						item_name = media_filename_without_extension
+					elseif filename_mode == script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED then
+						-- Filter out the filename extension
+						item_name = replace_variable(item_name, media_filename, media_filename_without_extension)
+					end
+				end
+			end
+
+			return item_name
+		end
 	end
 
 	local original_filenames = {}
@@ -1332,30 +1419,40 @@ local function get_filenames(items, filename_mode, custom_filename, guide_track_
 
 	-- Get filenames and count duplicates
 	for i, item in ipairs(items) do
-		local filename = iif(guide_track_settings.track_data.type == "subtitle", "Subtitle", ( { splitpath(item:GetName()) } )[2])
+		local media_pool_item = item:GetMediaPoolItem()	
+		local filename_by_mode = {}
 
-		if filename_mode ~= script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME then
-			local clip_name = filename
-			local media_pool_item = item:GetMediaPoolItem()	
-
-			--TODO: What about subclips?
-			if media_pool_item then
-				filename = ( { splitpath(media_pool_item:GetName()) } )[2]
-			end
-
-			-- Replace any custom filename variables with values
-			if filename_mode == script.constants.FILENAME_FROM.CUSTOM then
-				filename = custom_filename:
-					gsub(("%%{ClipFilename}"), filename):
-					gsub(("%%{ClipName}"), clip_name):
-					gsub(("%%{ClipNumber}"), string.format("%s%s", string.rep("0", #tostring(#items) - #tostring(i)), i)):
-					gsub(("%%{TrackName}"), guide_track_settings.track_data.name):
-					gsub(("%%{TrackNumber}"), guide_track_settings.track_data.index):
-					gsub(("%%{TrackType}"), guide_track_settings.track_data.type):
-					gsub(("%%{CurrentDate}"), script.iso_date()):
-					gsub(("%%{CurrentTime}"), script.iso_time())
+		for _, mode in pairs(script.constants.FILENAME_FROM) do
+			if (mode ~= script.constants.FILENAME_FROM.CUSTOM) then
+				filename_by_mode[mode] = get_clip_name(guide_track_settings.track_data.type, item, media_pool_item, mode)
 			end
 		end
+
+		if filename_mode == script.constants.FILENAME_FROM.CUSTOM then
+			-- Replace any custom filename variables with values
+			local variables =
+			{
+				[script.constants.VARIABLES.CLIP_FILENAME]		= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME],
+				[script.constants.VARIABLES.CLIP_NAME]			= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME],
+				[script.constants.VARIABLES.CLIP_NAME_FILTERED]	= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED],
+				[script.constants.VARIABLES.CLIP_NUMBER]		= string.format("%s%s", string.rep("0", #tostring(#items) - #tostring(i)), i),
+				[script.constants.VARIABLES.CURRENT_DATE]		= script.iso_date(),
+				[script.constants.VARIABLES.CURRENT_TIME]		= script.iso_time(),
+				[script.constants.VARIABLES.TRACK_NAME]			= guide_track_settings.track_data.name,
+				[script.constants.VARIABLES.TRACK_NUMBER]		= tostring(guide_track_settings.track_data.index),
+				[script.constants.VARIABLES.TRACK_TYPE]			= guide_track_settings.track_data.type,
+			}
+
+			local replaced_filename = custom_filename
+
+			for variable, value in pairs(variables) do
+				replaced_filename = replace_variable(replaced_filename, variable, value)
+			end
+
+			filename_by_mode[script.constants.FILENAME_FROM.CUSTOM] = replaced_filename
+		end
+
+		local filename = filename_by_mode[filename_mode]
 
 		if original_filenames[filename] == nil then
 			original_filenames[filename] = { count = 0 }
@@ -1448,6 +1545,11 @@ local function main()
 		local function get_timeline_offset(item)
 			local new_file_start_frame
 
+--			print("Timeline     timeline_start_frame: "..timeline_start_frame)
+--			print("Timeline        timeline_start_tc: "..luaresolve:timecode_from_frame(timeline_start_frame, 24, false))
+--			print("    Item    item:GetStart() frame: "..item:GetStart())
+--			print("    Item       item:GetStart() tc: "..luaresolve:timecode_from_frame(item:GetStart(), 24, false))
+			
 			if script.settings.timecode_from == script.constants.TIMECODE_FROM.GUIDE_TRACK_CLIP then
 				local left_offset = item:GetLeftOffset()
 
@@ -1461,7 +1563,18 @@ local function main()
 					if media_pool_item then
 						-- Media pool clips, Compound clips
 						--TODO: Subclips and Multicam clips
-						new_file_start_frame = luaresolve:frame_from_timecode(media_pool_item:GetClipProperty("Start TC"), 24) + left_offset --TODO: Frame rate of the timeline or of the clip?
+						--Note: Subclips don't have the In/Out clip properties.
+						--      They also use Start/End clip properties as left/right offset compared to the full clip.
+--						print("    Item                 Start TC: "..media_pool_item:GetClipProperty("Start TC"))
+--						print("    Item              Start Frame: "..luaresolve:frame_from_timecode(media_pool_item:GetClipProperty("Start TC"), 24))
+--						print("    Item                    Start: "..media_pool_item:GetClipProperty("Start"))
+--						print("    Item                      End: "..media_pool_item:GetClipProperty("End"))
+--						print("    Item               Start type: "..type(media_pool_item:GetClipProperty("Start")))
+--						print("    Item                 End type: "..type(media_pool_item:GetClipProperty("End")))
+--						print("    Item              left_offset: "..tostring(left_offset))
+--						dump(media_pool_item:GetClipProperty())
+						-- For subclips we need to add the "Start" ClipProperty that acts as the left offset
+						new_file_start_frame = luaresolve:frame_from_timecode(media_pool_item:GetClipProperty("Start TC"), 24) + left_offset + media_pool_item:GetClipProperty("Start") --TODO: Frame rate of the timeline or of the clip?
 					else
 						-- Fusion clips, Adjustment clips
 						-- We'll use the timeline start frame
@@ -1478,7 +1591,10 @@ local function main()
 			end
 				
 			local timeline_offset_frame = new_file_start_frame - (item:GetStart() - timeline_start_frame)
-
+--			print("    Item     new_file_start_frame: "..new_file_start_frame)
+--			print("Timeline    timeline_offset_frame: "..timeline_offset_frame)
+--			print("Timeline timeline_offset_timecode: "..luaresolve:timecode_from_frame(timeline_offset_frame, 24, false))
+--			print()
 			return luaresolve:timecode_from_frame(timeline_offset_frame, 24, false) --TODO: Frame rate of the timeline or of the clip?
 		end
 
@@ -1535,6 +1651,7 @@ local function main()
 			local item_timeline_timecode_end = luaresolve:timecode_from_frame(item:GetEnd(), 24, false) --TODO: Frame rate of the timeline or of the clip?
 
 			if script.settings.timecode_from == script.constants.TIMECODE_FROM.GUIDE_TRACK_CLIP or script.settings.timecode_from == script.constants.TIMECODE_FROM.CUSTOM then
+				--TODO: The offset trick doesn't work when we need to have the timeline start at a negative timecode
 				local new_start_timecode = get_timeline_offset(item)
 
 				if new_start_timecode ~= current_timeline_start_timecode then
@@ -1674,7 +1791,7 @@ local function main()
 				window = progress_window,
 			}
 			then
-				--TODO: Popup
+				--TODO: Popup explaining that the timeline start timecode has to be changed back manually
 			else
 				print("Cleanup completed")
 				current_timeline_start_timecode = timeline_start_timecode
@@ -1745,12 +1862,12 @@ local function main()
 					</style>
 				</head>
 				<body>
-					<h3>%s of %s render jobs did not complete</h3>
+					<h3>%s of %s render job%s did not complete</h3>
 					<table width="100%%" cellspacing="0" cellpadding="8">
 						%s
 					</table>
 				</body>
-				</html>]], #items - jobs.completed, #items, table.concat(jobs.results, "\n"))
+				</html>]], #items - jobs.completed, #items, iif(#items > 1, "s", ""), table.concat(jobs.results, "\n"))
 
 			script:show_popup( { 400, 500 }, html, { "OK" } )
 		end
