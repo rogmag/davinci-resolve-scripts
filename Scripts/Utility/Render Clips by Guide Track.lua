@@ -85,9 +85,20 @@ script =
 		local start_time = os.clock()
 		local timeout = iif(settings.timeout, settings.timeout, self.default_timeout)
 
-		-- Make the secondary progress bar visible
-		if not success and settings.window then
-			script:update_progress(settings.window, "SecondaryProgressUpdated", { Progress = 100, Status = string.format("Retrying command... (%ss)", timeout), Visible = true } )
+		if not success then
+			--TODO: Move the showing of the progress into the while loop and wait a few iterations before showing it.
+			--      This way we won't confuse the user with red flashing text when something is immediately successful after an initial fail.
+			local status = string.format("%s (Retrying %ss)", settings.message, timeout)
+			
+			if self.progress_window then
+				-- Show the progress bar window in case it's hidden (checking the Hidden property doesn't work)
+				self.progress_window:Show()
+
+				-- Make the secondary progress bar visible
+				script:update_progress("SecondaryProgressUpdated", { Progress = 100, Status = status, Visible = true } )
+			else
+				print(status)
+			end
 		end
 
 		while (not success) do
@@ -95,22 +106,24 @@ script =
 			local time_left = timeout - elapsed_time
 
 			if (elapsed_time >= timeout) then
-
-				--TODO: should we have a settings.continue_after_fail bool? Now we're closing the window even if we want to continue. 
-
-				if settings.window then
+				if self.progress_window then
+					--TODO: should we have a settings.continue_after_fail bool? Now we're closing the window even if we want to continue. 
 					-- Progress window
 					self.dispatcher:ExitLoop()
-					settings.window:Hide()
+					self.progress_window:Hide()
 				end
 
-				self:show_popup( { 500, 200 }, settings.message, { "OK" } )
+				self:show_popup( { 500, 200 }, iif(settings.message_detail, settings.message_detail, settings.message), { "OK" } )
 				
 				return result
 			end
 
-			if settings.window then
-				script:update_progress(settings.window, "SecondaryProgressUpdated", { Progress = 100 * time_left / timeout, Status = string.format("Retrying command... (%.0fs)", time_left) } )
+			local status = string.format("%s (Retrying... %.0fs)", settings.message, time_left)
+
+			if self.progress_window then
+				script:update_progress("SecondaryProgressUpdated", { Progress = 100 * time_left / timeout, Status = status } )
+			else
+				print(status)
 			end
 
 			self.sleep(500)
@@ -119,8 +132,8 @@ script =
 			success = result ~= nil and result ~= false
 
 			-- Hide the secondary progress bar
-			if success and settings.window then
-				script:update_progress(settings.window, "SecondaryProgressUpdated", { Progress = 0, Status = "", Visible = false } )
+			if success and self.progress_window then
+				script:update_progress("SecondaryProgressUpdated", { Progress = 0, Status = "", Visible = false } )
 			end
 		end
 
@@ -244,7 +257,7 @@ script =
 		local progress_margin = 67
 		local progress_bottom_margin = 30
 
-		local progress_window = self.dispatcher:AddWindow(
+		local prog_win = self.dispatcher:AddWindow(
 		{
 			ID = script.window_id.."Progress",
 			Margin = 0,
@@ -433,7 +446,7 @@ script =
 			},
 		})
 
-		local progress_items = progress_window:GetItems()
+		local progress_items = prog_win:GetItems()
 
 		progress_items.ProgressBar:Resize( { 0, 1} )
 		progress_items.SecondaryProgressBar:Resize( { 0, 1} )
@@ -454,12 +467,12 @@ script =
 		progress_items.SecondaryProgressBar:Move( { (progress_margin + 1) / 2, progress_y_pos + 19 + progress_bottom_margin } )
 		progress_items.SecondaryProgressBarStatus:Move( { (progress_margin - 1) / 2 - 1, progress_y_pos + progress_bottom_margin } )
 
-		progress_window.On[script.window_id.."Progress"].ProgressUpdated = function(ev)
+		prog_win.On[script.window_id.."Progress"].ProgressUpdated = function(ev)
 			progress_items.ProgressBarStatus.Text = ev.Status
 			progress_items.ProgressBar:Resize( { ev.Progress * (width - progress_margin) / 100, 1} )
 		end
 	
-		progress_window.On[script.window_id.."Progress"].SecondaryProgressUpdated = function(ev)
+		prog_win.On[script.window_id.."Progress"].SecondaryProgressUpdated = function(ev)
 			if ev.Visible ~= nil then
 				progress_items.SecondaryProgressBarStatus.Visible = ev.Visible
 				progress_items.SecondaryProgressBarBorder.Visible = ev.Visible
@@ -470,20 +483,22 @@ script =
 			progress_items.SecondaryProgressBar:Resize( { ev.Progress * (width - progress_margin) / 100, 1} )
 		end
 		
-		progress_window.On[script.window_id.."Progress"].HeaderUpdated = function(ev)
+		prog_win.On[script.window_id.."Progress"].HeaderUpdated = function(ev)
 			progress_items.ProgressHeader.Text = ev.Status
 		end
 
-		progress_window.On[script.window_id.."Progress"].SecondaryHeaderUpdated = function(ev)
+		prog_win.On[script.window_id.."Progress"].SecondaryHeaderUpdated = function(ev)
 			progress_items.SecondaryProgressHeader.Text = ev.Status
 		end
 
-		return progress_window._window
+		self.progress_window = prog_win._window
 	end,
 
-	update_progress = function(self, control, event_name, event_data)
-		self.ui:QueueEvent(control, event_name, event_data)
-		self.dispatcher:StepLoop()
+	update_progress = function(self, event_name, event_data)
+		if self.progress_window then
+			self.ui:QueueEvent(self.progress_window, event_name, event_data)
+			self.dispatcher:StepLoop()
+		end
 	end,
 
 	iso_date = function()
@@ -636,67 +651,182 @@ luaresolve =
 		return track_names_by_type
 	end,
 
-	change_page = function(page)
-		local current_page, state
+	get_path_by_media_pool_folder = function(media_pool, media_pool_folder)
+		local root_folder = media_pool:GetRootFolder()
+		local stack = table.pack(
+		{
+			name = "/"..root_folder:GetName(),
+			folder = root_folder
+		})
 
-		current_page = resolve:GetCurrentPage()
-		
-		local function get_state()
-			local current_state =
-			{
-				page = current_page,
-				project = resolve:GetProjectManager():GetCurrentProject()
-			}
+		while #stack > 0 do
+			local current_folder_info = table.remove(stack)
 
-			if current_state.project then
-				current_state.timeline = current_state.project:GetCurrentTimeline()
-
-				if current_state.timeline then
-					current_state.timecode = current_state.timeline:GetCurrentTimecode()
-				end
+			if (current_folder_info.folder == media_pool_folder) then
+				return current_folder_info.name
 			end
 
-			return current_state
+			for _, sub_folder in ipairs(current_folder_info.folder:GetSubFolderList()) do
+				table.insert(stack, { name = current_folder_info.name.."/"..sub_folder:GetName(), folder = sub_folder })
+			end
 		end
 
-		if current_page == "media" or current_page == "fusion" then
-			-- We can't get current timecode from the Media or Fusion pages, so try switching to the requested page first
-			assert(resolve:OpenPage(page), "Couldn't open page: "..page)
-			state = get_state()
-		else
-			-- Otherwise get the state first, in case we're switching to Media or Fusion
-			state = get_state()
-			assert(resolve:OpenPage(page), "Couldn't open page: "..page)
-		end
-
-		return state
+		return nil
 	end,
 
-	restore_page = function(state)
-		local function set_state(initial_state)
-			local current_project, current_timeline
-			current_project = resolve:GetProjectManager():GetCurrentProject()
+	traverse_media_pool = function(self, media_pool, start_folder, folder_event_handler, clip_event_handler)
+		local stack = table.pack(
+		{
+			path = self.get_path_by_media_pool_folder(media_pool, start_folder),
+			folder = start_folder
+		})
 
-			if current_project then
-				current_timeline = current_project:GetCurrentTimeline()
+		--TODO: Allow to break out of the loops from inside the event handlers
 
-				if current_timeline ~= nil and current_timeline == initial_state.timeline and initial_state.timecode ~= nil then
-					initial_state.timeline:SetCurrentTimecode(initial_state.timecode)
+		while #stack > 0 do
+			local current_folder_info = table.remove(stack)
+		
+			if (folder_event_handler) then
+				folder_event_handler(current_folder_info.folder, current_folder_info)
+			end
+		
+			if (clip_event_handler) then 
+				for _, clip in ipairs(current_folder_info.folder:GetClipList()) do
+					clip_event_handler(clip, current_folder_info)
 				end
+			end
+
+			for _, sub_folder in ipairs(current_folder_info.folder:GetSubFolderList()) do
+				table.insert(stack,
+				{
+					path = current_folder_info.path.."/"..sub_folder:GetName(),
+					folder = sub_folder
+				})
+			end
+		end
+	end,
+
+	get_timeline_media_pool_item = function(self, media_pool, timeline)
+		local media_pool_item = nil
+
+		local function timeline_equals(clip, folder_info)
+			if (clip:GetClipProperty("Type") == "Timeline" --TODO: Won't work if Resolve is set to another language
+				and clip:GetClipProperty("File Name") == timeline:GetName()
+				and clip:GetClipProperty("Start TC") == timeline:GetStartTimecode()
+				and tonumber(clip:GetClipProperty("Frames")) == timeline:GetEndFrame() - timeline:GetStartFrame()
+				and clip:GetClipProperty("File Path") == "" -- This should rule out any files
+				--TODO: We can still have false a match with duplicate timelines and compound clips if we can't use Type
+			)
+			then
+				--print("timeline UniqueId: "..timeline:GetUniqueId())
+				--print("    timeline Name: "..timeline:GetName())
+				--dump(timeline:GetSetting())
+				--print("    item UniqueId: "..clip:GetUniqueId())
+				--print("     item MediaId: "..clip:GetMediaId())
+				--print("        item Name: "..clip:GetName())
+				--dump(clip:GetClipProperty())
+				media_pool_item = clip
 			end
 		end
 
-		local current_page = resolve:GetCurrentPage()
+		self:traverse_media_pool(media_pool, media_pool:GetRootFolder(), nil, timeline_equals)
+		return media_pool_item
+	end,
 
-		if current_page == "media" or current_page == "fusion" then
-			-- We can't get set current timecode on the Media or Fusion pages, so try switching to the original page first
-			resolve:OpenPage(state.page)
-			set_state(state)
-		else
-			-- Otherwise set the state first, in case we're going back to Media or Fusion
-			set_state(state)
-			resolve:OpenPage(state.page)
+	get_item_property = function(item, property_key)
+		local message = "Couldn't get item property"
+		local message_detail = message
+
+		if property_key ~= nil and #property_key > 0 then
+			message_detail = message_detail.."\" "..property_key.."\""
 		end
+
+		return script:retry
+		{
+			func = item.GetProperty,
+			arguments =
+			{
+				item,
+				property_key,
+			},
+			message = message,
+			message_detail = message_detail,
+		}
+	end,
+
+	create_timeline_from_clips = function(media_pool, name, clip_info)
+		return script:retry
+		{
+			func = media_pool.CreateTimelineFromClips,
+			arguments =
+			{
+				media_pool,
+				name,
+				clip_info
+			},
+			message = "Couldn't create timeline",
+			message_detail = string.format("Couldn't create timeline \"%s\"", name),
+		}
+	end,
+
+	set_render_settings = function(project, settings)
+		return script:retry
+		{
+			func = project.SetRenderSettings,
+			arguments =
+			{
+				project,
+				settings
+			},
+			message = "Couldn't set render settings",
+		}
+	end,
+
+	add_render_job = function(project, filename)
+		return script:retry
+		{
+			func = project.AddRenderJob,
+			arguments = { project },
+			message = "Couldn't add render job",
+			message_detail = string.format("Couldn't add render job for \"%s\"", filename),
+		}
+	end,
+
+	set_start_timecode = function(timeline, timecode)
+		return script:retry
+		{
+			func = timeline.SetStartTimecode,
+			arguments = { timeline, timecode },
+			message = "Couldn't set start timecode",
+			message_detail = string.format("Couldn't set start timecode to %s", timecode),
+		}
+	end,
+
+	start_rendering = function(project, render_job_ids, is_interactive_mode)
+		return script:retry
+		{
+			func = project.StartRendering,
+			arguments = { project, render_job_ids, is_interactive_mode },
+			message = "Couldn't start rendering",
+		}
+	end,
+
+	delete_render_job = function(project, render_job_id)
+		return script:retry
+		{
+			func = project.DeleteRenderJob,
+			arguments = { project, render_job_id },
+			message = "Couldn't delete render job",
+		}
+	end,
+
+	delete_timelines = function(media_pool, timelines) --TODO: Do we need this if we use the Timelines bin?
+		return script:retry
+		{
+			func = media_pool.DeleteTimelines,
+			arguments = { media_pool, timelines },
+			message = "Couldn't delete timelines",
+		}
 	end,
 }
 
@@ -1333,168 +1463,405 @@ local function wait_for_user()
 	script.sleep(4000)
 end
 
-local function get_filenames(items, filename_mode, custom_filename, guide_track_settings)
-	local function replace_variable(str, variable, variable_value)
-		local v_start, v_end = str:find(variable, nil, true)
+local function main()
+	local function populate_timeline_properties(t, media_pool, guide_track_settings)
+		assert(t and t.Current, "\"t.Current\" has to have a value before running populate_timeline_properties()")
 
-		if v_start then
-			return table.concat
-			{
-				str:sub(1, v_start - 1),
-				variable_value,
-				str:sub(v_end + 1)
-			}
-		else
-			return str
-		end
-	end
-
-	local function sanitize_filename(filename)
-		-- Sanitizes a filename in case it came from a clip name
-
-		local sanitized_filename = filename:
-			gsub("/", " "):
-			gsub("\\", " "):
-			gsub("?", " "):
-			gsub("%%", " "):
-			gsub("*", " "):
-			gsub(":", " "):
-			gsub("|", " "):
-			gsub("\"", " "):
-			gsub("<", " "):
-			gsub(">", " ")
-
-		-- In case we're writing to a fat32 volume that might be used elsewhere or a UNIX file system
-		local reserved_words =
+		t.Start = 
 		{
-			"null", "NULL",
-			"AUX",
-			"COM1", "COM2", "COM3", "COM4",
-			"LPT1", "LPT1", "LPT1", "LPT1",
-			"LST",
-			"NUL",
-			"PRN",
+			Frame = t.Current:GetStartFrame(),
+			Timecode = t.Current:GetStartTimecode()
 		}
 
-		for _, reserved_word in ipairs(reserved_words) do
-			if sanitized_filename == reserved_word then
-				sanitized_filename = string.format("(%s)", reserved_word)
+		t.End =
+		{
+			Frame = t.Current:GetEndFrame(),
+			Timecode = luaresolve:timecode_from_frame(t.Current:GetEndFrame(), 24, false) --TODO: Only used for debug printing     --TODO: Frame rate of the timeline or of the clip?
+		}
+
+		t.MediaPoolItem = luaresolve:get_timeline_media_pool_item(media_pool, t.Current)
+
+		t.In = { Timecode = t.MediaPoolItem:GetClipProperty("In") }
+		t.Out =  { Timecode = t.MediaPoolItem:GetClipProperty("Out") }
+		
+		if #t.In.Timecode == 0 then
+			t.In.Frame = t.Start.Frame
+			t.In.Timecode = t.Start.Timecode
+		else
+			t.In.Frame = luaresolve:frame_from_timecode(t.In.Timecode, 24) --TODO: Frame rate of the timeline or of the clip?
+		end
+
+		if #t.Out.Timecode == 0 then
+			t.Out.Frame = t.End.Frame
+			t.Out.Timecode = luaresolve:timecode_from_frame(t.Out.Frame, 24, false) --TODO: Frame rate of the timeline or of the clip?
+		else
+			t.Out.Frame = luaresolve:frame_from_timecode(t.Out.Timecode, 24) --TODO: Frame rate of the timeline or of the clip?
+		end
+
+		--t.Items = {}
+		--
+		--for _, item in ipairs(t.Current:GetItemListInTrack(guide_track_settings.track_data.type, guide_track_settings.track_data.index)) do
+		--	
+		--	if next(item:GetProperty()) then
+		--		t.Items[#t.Items+1] = item
+		--	end
+		--end
+	end
+
+	local function get_clips(t, filename_mode, custom_filename, guide_track_settings)
+		local function replace_variable(str, variable, variable_value)
+			local v_start, v_end = str:find(variable, nil, true)
+
+			if v_start then
+				return table.concat
+				{
+					str:sub(1, v_start - 1),
+					variable_value,
+					str:sub(v_end + 1)
+				}
+			else
+				return str
 			end
 		end
 
-		-- Trim spaces
-		return sanitized_filename:gsub("^%s+", ""):gsub("%s+$", "")
-	end
+		local function sanitize_filename(filename)
+			-- Sanitizes a filename in case it came from a clip name
 
-	local function get_clip_name(track_type, item, media_pool_item, filename_mode)
-		if track_type == "subtitle" then
-			return "Subtitle"
-		else
-			local item_name = item:GetName()
-		
-			-- Trim or filter the item name file extension
-			if media_pool_item and #media_pool_item:GetClipProperty("File Path") > 0 then
-				local media_filename = media_pool_item:GetClipProperty("File Name")
-				local media_filename_without_extension = ( { splitpath(media_filename) } )[2]
+			local sanitized_filename = filename:
+				gsub("/", " "):
+				gsub("\\", " "):
+				gsub("?", " "):
+				gsub("%%", " "):
+				gsub("*", " "):
+				gsub(":", " "):
+				gsub("|", " "):
+				gsub("\"", " "):
+				gsub("<", " "):
+				gsub(">", " ")
 
-				if filename_mode == script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME then
-					item_name = media_filename_without_extension
-				else
-					if item_name:sub(-#media_filename) == media_filename then -- item_name ends with media_filename
-						-- Trim the filename extension
-						item_name = media_filename_without_extension
-					elseif filename_mode == script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED then
-						-- Filter out the filename extension
-						item_name = replace_variable(item_name, media_filename, media_filename_without_extension)
-					end
+			-- In case we're writing to a fat32 volume that might be used elsewhere or a UNIX file system
+			local reserved_words =
+			{
+				"null", "NULL",
+				"AUX",
+				"COM1", "COM2", "COM3", "COM4",
+				"LPT1", "LPT1", "LPT1", "LPT1",
+				"LST",
+				"NUL",
+				"PRN",
+			}
+
+			for _, reserved_word in ipairs(reserved_words) do
+				if sanitized_filename == reserved_word then
+					sanitized_filename = string.format("(%s)", reserved_word)
 				end
 			end
 
-			return item_name
+			-- Trim spaces
+			return sanitized_filename:gsub("^%s+", ""):gsub("%s+$", "")
 		end
-	end
 
-	local original_filenames = {}
-	local filename_data = {}
+		local function get_clip_name(track_type, item, media_pool_item, filename_mode)
+			if track_type == "subtitle" then
+				return "Subtitle"
+			else
+				local item_name = item:GetName()
+		
+				-- Trim or filter the item name file extension
+				if media_pool_item and #media_pool_item:GetClipProperty("File Path") > 0 then
+					local media_filename = media_pool_item:GetClipProperty("File Name")
+					local media_filename_without_extension = ( { splitpath(media_filename) } )[2]
 
-	-- Get filenames and count duplicates
-	for i, item in ipairs(items) do
-		local media_pool_item = item:GetMediaPoolItem()	
-		local filename_by_mode = {}
+					if filename_mode == script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME then
+						item_name = media_filename_without_extension
+					else
+						if item_name:sub(-#media_filename) == media_filename then -- item_name ends with media_filename
+							-- Trim the filename extension
+							item_name = media_filename_without_extension
+						elseif filename_mode == script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED then
+							-- Filter out the filename extension
+							item_name = replace_variable(item_name, media_filename, media_filename_without_extension)
+						end
+					end
+				end
 
-		for _, mode in pairs(script.constants.FILENAME_FROM) do
-			if (mode ~= script.constants.FILENAME_FROM.CUSTOM) then
-				filename_by_mode[mode] = get_clip_name(guide_track_settings.track_data.type, item, media_pool_item, mode)
+				return item_name
 			end
 		end
 
-		if filename_mode == script.constants.FILENAME_FROM.CUSTOM then
-			-- Replace any custom filename variables with values
-			local variables =
+		local original_filenames = {}
+		local clip_properties = {}
+		t.Items = {}
+
+		-- Filter out transitions
+		for i, item in ipairs(t.Current:GetItemListInTrack(guide_track_settings.track_data.type, guide_track_settings.track_data.index)) do
+			local item_properties = luaresolve.get_item_property(item)
+
+			if item_properties == nil then
+				return nil
+			end
+
+			-- Hack: Hopefully nothing else will get filtered out
+			if next(item_properties) then
+				t.Items[#t.Items+1] = item
+			end
+		end
+
+		-- Get filenames and count duplicates
+		for i, item in ipairs(t.Items) do
+			local media_pool_item = item:GetMediaPoolItem()	
+			local filename_by_mode = {}
+
+			for _, mode in pairs(script.constants.FILENAME_FROM) do
+				if (mode ~= script.constants.FILENAME_FROM.CUSTOM) then
+					filename_by_mode[mode] = get_clip_name(guide_track_settings.track_data.type, item, media_pool_item, mode)
+				end
+			end
+
+			if filename_mode == script.constants.FILENAME_FROM.CUSTOM then
+				-- Replace any custom filename variables with values
+				local variables =
+				{
+					[script.constants.VARIABLES.CLIP_FILENAME]		= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME],
+					[script.constants.VARIABLES.CLIP_NAME]			= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME],
+					[script.constants.VARIABLES.CLIP_NAME_FILTERED]	= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED],
+					[script.constants.VARIABLES.CLIP_NUMBER]		= string.format("%s%s", string.rep("0", #tostring(#t.Items) - #tostring(i)), i),
+					[script.constants.VARIABLES.CURRENT_DATE]		= script.iso_date(),
+					[script.constants.VARIABLES.CURRENT_TIME]		= script.iso_time():gsub(":", "."),
+					[script.constants.VARIABLES.TRACK_NAME]			= guide_track_settings.track_data.name,
+					[script.constants.VARIABLES.TRACK_NUMBER]		= tostring(guide_track_settings.track_data.index),
+					[script.constants.VARIABLES.TRACK_TYPE]			= guide_track_settings.track_data.type,
+				}
+
+				local replaced_filename = custom_filename
+
+				for variable, value in pairs(variables) do
+					replaced_filename = replace_variable(replaced_filename, variable, value)
+				end
+
+				filename_by_mode[script.constants.FILENAME_FROM.CUSTOM] = replaced_filename
+			end
+
+			local filename = filename_by_mode[filename_mode]
+
+			if original_filenames[filename] == nil then
+				original_filenames[filename] = { count = 0 }
+			end
+
+			local count = original_filenames[filename].count + 1
+			original_filenames[filename].count = count
+
+			clip_properties[#clip_properties+1] =
 			{
-				[script.constants.VARIABLES.CLIP_FILENAME]		= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_FILENAME],
-				[script.constants.VARIABLES.CLIP_NAME]			= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME],
-				[script.constants.VARIABLES.CLIP_NAME_FILTERED]	= filename_by_mode[script.constants.FILENAME_FROM.GUIDE_TRACK_CLIP_NAME_FILTERED],
-				[script.constants.VARIABLES.CLIP_NUMBER]		= string.format("%s%s", string.rep("0", #tostring(#items) - #tostring(i)), i),
-				[script.constants.VARIABLES.CURRENT_DATE]		= script.iso_date(),
-				[script.constants.VARIABLES.CURRENT_TIME]		= script.iso_time(),
-				[script.constants.VARIABLES.TRACK_NAME]			= guide_track_settings.track_data.name,
-				[script.constants.VARIABLES.TRACK_NUMBER]		= tostring(guide_track_settings.track_data.index),
-				[script.constants.VARIABLES.TRACK_TYPE]			= guide_track_settings.track_data.type,
+				filename = filename,
+				number = count,
+				item = item,
+				media_pool_item = media_pool_item,
+			}
+		end
+
+		local clips = {}
+
+		-- We need another loop to add leading zeros to duplicate clip names as we can't know how many there are in advance
+		for i = 1, #t.Items do
+			local count = original_filenames[clip_properties[i].filename].count
+			local number = clip_properties[i].number
+
+			local count_characters = #tostring(count)
+			local filename = iif(count == 1, clip_properties[i].filename, string.format("%s.%s%s", clip_properties[i].filename, string.rep("0", count_characters - #tostring(number)), number))
+
+			clips[i] =
+			{
+				Filename = sanitize_filename(filename),
+				Item = clip_properties[i].item,
+				MediaPoolItem = clip_properties[i].media_pool_item,
+			}
+		end
+
+		return clips
+	end
+
+	local function get_timeline_start(clip, timeline_start_frame, timeline_offset)
+		local new_file_start_frame
+
+		if script.settings.timecode_from == script.constants.TIMECODE_FROM.GUIDE_TRACK_CLIP then
+			local left_offset = clip.Item:GetLeftOffset()
+
+			if left_offset == nil then
+				-- Non-Fusion Titles, Non-Fusion Generators, Subtitles and Transitions don't have an offset
+				--TODO: What about subclips and multicam clips? If they're generators?
+				new_file_start_frame = timeline_start_frame
+			else
+				if clip.MediaPoolItem then
+					-- Media pool clips, Compound clips
+					--TODO: Subclips and Multicam clips
+					--Note: Subclips don't have the In/Out clip properties.
+					--      They also use Start/End clip properties as left/right offset compared to the full clip.
+
+					-- For subclips we need to add the "Start" ClipProperty that acts as the left offset
+					new_file_start_frame = luaresolve:frame_from_timecode(clip.MediaPoolItem:GetClipProperty("Start TC"), 24) + left_offset + clip.MediaPoolItem:GetClipProperty("Start") --TODO: Frame rate of the timeline or of the clip?
+				else
+					-- Fusion clips, Adjustment clips
+					-- We'll use the timeline start frame
+					new_file_start_frame = timeline_start_frame + left_offset
+
+					-- Note: Adjustment clips have crazy offsets, don't know if it's by design or a bug,
+					-- they also seem to break the Data Burn-In feature for Source Timecode/Frame Number
+				end
+			end
+
+			new_file_start_frame = new_file_start_frame + timeline_offset
+		elseif script.settings.timecode_from == script.constants.TIMECODE_FROM.CUSTOM then
+			new_file_start_frame = luaresolve:frame_from_timecode(script.settings.custom_timecode, 24) + timeline_offset --TODO: Frame rate of the timeline or of the clip?
+		else
+			new_file_start_frame = clip.Start.Frame
+		end
+
+		return new_file_start_frame
+	end
+
+	local function populate_item_properties(t, clips)
+		for i, clip in ipairs(clips) do
+			local item = clip.Item
+			local item_start = item:GetStart()
+			local item_end = item:GetEnd()
+			local timeline_offset = 0
+
+			local in_out_contains_whole_clip = item_start >= t.In.Frame and item_end <= t.Out.Frame + 1
+			local in_out_cuts_clip_start_and_end = item_start < t.In.Frame and item_end > t.Out.Frame + 1
+			local in_out_cuts_clip_start = item_start < t.In.Frame and item_end > t.In.Frame and item_end <= t.Out.Frame + 1
+			local in_out_cuts_clip_end = item_start >= t.In.Frame and item_start < t.Out.Frame + 1 and item_end > t.Out.Frame + 1
+			local render_clip = in_out_contains_whole_clip or in_out_cuts_clip_start_and_end or in_out_cuts_clip_start or in_out_cuts_clip_end
+
+			if in_out_cuts_clip_start_and_end then
+				timeline_offset = t.In.Frame - item_start
+				item_start = t.In.Frame
+				item_end = t.Out.Frame + 1
+			elseif in_out_cuts_clip_start then
+				timeline_offset = t.In.Frame - item_start
+				item_start = t.In.Frame
+			elseif in_out_cuts_clip_end then
+				item_end = t.Out.Frame + 1
+			end
+
+			clip.Start =
+			{
+				Frame = item_start,
+				Timecode = luaresolve:timecode_from_frame(item_start, 24, false)  --TODO: Frame rate of the timeline or of the clip?
 			}
 
-			local replaced_filename = custom_filename
+			clip.End = 
+			{
+				Frame = item_end,
+				Timecode = luaresolve:timecode_from_frame(item_end, 24, false)  --TODO: Frame rate of the timeline or of the clip?
+			}
+			
+			local new_timeline_start_frame = get_timeline_start(clip, t.Start.Frame, timeline_offset)
+			local new_timeline_start_timecode = luaresolve:timecode_from_frame(new_timeline_start_frame, 24, false)  --TODO: Frame rate of the timeline or of the clip?
 
-			for variable, value in pairs(variables) do
-				replaced_filename = replace_variable(replaced_filename, variable, value)
+			clip.TimelineStart =
+			{
+				Frame = luaresolve:frame_from_timecode(new_timeline_start_timecode, 24),  --TODO: Frame rate of the timeline or of the clip?
+				Timecode = new_timeline_start_timecode
+			}
+
+			clip.TimelineEnd =
+			{
+				Frame = new_timeline_start_frame + item:GetDuration(),
+				Timecode = luaresolve:timecode_from_frame(new_timeline_start_frame + item:GetDuration(), 24, false)  --TODO: Frame rate of the timeline or of the clip?
+			}
+
+			if render_clip then
+				if clips.ClipsToRender == nil then
+					clips.ClipsToRender = {}
+				end
+
+				clips.ClipsToRender[#clips.ClipsToRender+1] = 
+				{
+					Clip = clip,
+				}
 			end
-
-			filename_by_mode[script.constants.FILENAME_FROM.CUSTOM] = replaced_filename
 		end
-
-		local filename = filename_by_mode[filename_mode]
-
-		if original_filenames[filename] == nil then
-			original_filenames[filename] = { count = 0 }
-		end
-
-		local count = original_filenames[filename].count + 1
-		original_filenames[filename].count = count
-		filename_data[i] =
-		{
-			filename = filename,
-			number = count
-		}
 	end
 
-	local filenames = {}
+	local function create_timelines(media_pool, t, clips)
+		for i, clip_to_render in ipairs(clips.ClipsToRender) do
+			local clip = clip_to_render.Clip
 
-	-- We need another loop to add leading zeros to duplicate clip names as we can't know how many there are in advance
-	for i = 1, #items do
-		local count = original_filenames[filename_data[i].filename].count
-		local number = filename_data[i].number
+			--TODO: Frame rate of the timeline or of the clip?
+			script:update_progress("ProgressUpdated",
+			{
+				Progress = 100 * i / #clips.ClipsToRender,
+				Status = string.format("Timeline %s of %s as %s - %s", i, #clips.ClipsToRender, clip.TimelineStart.Timecode, clip.TimelineEnd.Timecode)
+			})
+			
+			clip_to_render.Timeline = luaresolve.create_timeline_from_clips(media_pool, string.format("[%s] %s", i, bmd.createuuid()),
+			{
+				{
+					mediaPoolItem = t.MediaPoolItem,
+					startFrame = clip.Start.Frame - t.Start.Frame,
+					endFrame = clip.End.Frame - t.Start.Frame - 1
+				}
+			})
 
-		local count_characters = #tostring(count)
-		local filename = iif(count == 1, filename_data[i].filename, string.format("%s.%s%s", filename_data[i].filename, string.rep("0", count_characters - #tostring(number)), number))
-		filenames[i] = sanitize_filename(filename)
+			if clip_to_render.Timeline == nil then
+				return nil
+			else
+				if not luaresolve.set_start_timecode(clip_to_render.Timeline, clip.TimelineStart.Timecode) then
+					return nil
+				end
+			end
+		end
+
+		return true
 	end
 
-	return filenames
-end
+	local function queue_render_job(project, timeline, filename, location)
+		project:SetCurrentTimeline(timeline) --TODO: retry?
 
-local function main()
+		if not luaresolve.set_render_settings(project, { TargetDir = location, CustomName = filename } ) then
+			return nil
+		end
+			
+		return luaresolve.add_render_job(project, filename)
+	end
+
+	local function add_job_result(job_results, clip_number, filename, file_extension, status, start_timecode, end_timecode)
+		job_results[#job_results+1] = string.format(
+			[[
+				<tr>
+					<td class="spacercell" colspan="3"></td>
+				</tr>
+				<tr>
+					<th class="headerleft" align="left" width="80">Clip %s</th>
+					<th align="left">%s - %s</th>
+					<th class="headerright" align="right" width="100">%s at %s%%</th>
+				</tr>
+				<tr>
+					<td class="cell" colspan="3">%s%s</td>
+				</tr>
+				<tr>
+					<td class="bottomcell" colspan="3">%s</td>
+				</tr>
+			]],
+			clip_number,
+			start_timecode, end_timecode,
+			status.JobStatus, status.CompletionPercentage,
+			filename, file_extension,
+			iif(status.JobStatus == "Failed" and status.Error, status.Error, "")
+		)
+	end
+
 	local project = assert(resolve:GetProjectManager():GetCurrentProject(), "Couldn't get current project")
-	local timeline = assert(project:GetCurrentTimeline(), "Couldn't get current timeline")
-	local window, windowItems = create_window(project, timeline)
+	local t = { Current = assert(project:GetCurrentTimeline(), "Couldn't get current timeline") } --TODO: Remove asserts
+	local window, windowItems = create_window(project, t.Current)
 
 	window:Show()
 	local guide_track_settings = script.dispatcher:RunLoop()
 	window:Hide()
 
 	if guide_track_settings then
-		local progress_window = script:create_progress_window("Rendering")
-		progress_window:Show()
-
+		script:create_progress_window("Creating timelines")
 		-- Note: Some DaVinci Resolve functions have to be called via the script:retry() function
 		--       because they can't run if the automated project backup is starting or if the user
 		--       has opened a modal window, like Project Settings.
@@ -1504,18 +1871,21 @@ local function main()
 			{
 				func = project.LoadRenderPreset,
 				arguments = { project, script.settings.render_preset },
-				message = "Unable to load render preset: "..script.settings.render_preset,
-				window = progress_window,
+				message = "Couldn't load render preset",
+				message_detail = string.format("Couldn't load render preset \"%s\"", script.settings.render_preset)
 			}
 			then
+				-- Note: LoadRenderPreset() triggers switch to the Deliver page
 				goto exit
 			end
 		end
 
+		--TODO: Run this before opening the main window?
 		if project:GetCurrentRenderMode() == 0 then
+			-- Note: GetCurrentRenderMode() triggers switch to the Deliver page
 			-- 0 = Individual clips
 			-- 1 = Single clip
-
+		
 			script:show_popup( { 500, 200 }, [[
 				<html>
 				<body>
@@ -1525,354 +1895,167 @@ local function main()
 					</p>
 				</body>
 				</html>]], { "OK" } )
-
+		
 			goto exit
 		end
 
-		local timeline_start_frame = timeline:GetStartFrame()
-		local timeline_start_timecode = timeline:GetStartTimecode()
-		local current_timeline_start_timecode = timeline_start_timecode
-		local items = timeline:GetItemListInTrack(guide_track_settings.track_data.type, guide_track_settings.track_data.index)
-		local filenames = get_filenames(items, windowItems.FilenameComboBox.CurrentText, windowItems.CustomFilenameLineEdit.Text, guide_track_settings)
-		local file_extension = string.format(".%s", project:GetCurrentRenderFormatAndCodec().format)
-		local jobs =
-		{
-			results = {},
-			failed = 0, -- Doesn't include cancelled jobs
-			completed = 0
-		}
+		do
+			local media_pool = project:GetMediaPool()
+			local current_folder = media_pool:GetCurrentFolder()
+			populate_timeline_properties(t, media_pool, guide_track_settings)
+			local clips = get_clips(t, windowItems.FilenameComboBox.CurrentText, windowItems.CustomFilenameLineEdit.Text, guide_track_settings)
 
-		local function get_timeline_offset(item)
-			local new_file_start_frame
+			if clips == nil then
+				goto exit
+			end
 
---			print("Timeline     timeline_start_frame: "..timeline_start_frame)
---			print("Timeline        timeline_start_tc: "..luaresolve:timecode_from_frame(timeline_start_frame, 24, false))
---			print("    Item    item:GetStart() frame: "..item:GetStart())
---			print("    Item       item:GetStart() tc: "..luaresolve:timecode_from_frame(item:GetStart(), 24, false))
+			populate_item_properties(t, clips)
+			clips.Jobs = {}
+			clips.Results = {}
+			local file_extension = string.format(".%s", project:GetCurrentRenderFormatAndCodec().format) --TODO: retry?
+
+			resolve:OpenPage("media")
+
+			-- Create a temporary bin
+			local folder = media_pool:AddSubFolder(media_pool:GetRootFolder(), bmd.createuuid())
+			media_pool:SetCurrentFolder(folder)
+
+			script.progress_window:Show()
+
+			-- We'll create all the timelines first before queuing render jobs so Resolve doesn't keep switching between pages
+			if not create_timelines(media_pool, t, clips) then
+				goto errorcleanup
+			end
+
+			--resolve:OpenPage("deliver")
+			script:update_progress("HeaderUpdated", { Status = "Adding render jobs" } )
+
+			-- Now set up the render jobs
+			for i, clip_to_render in ipairs(clips.ClipsToRender) do
+				script:update_progress("ProgressUpdated",
+				{
+					Progress = 100 * i / #clips.ClipsToRender,
+					Status = string.format("Job %s of %s", i, #clips.ClipsToRender)
+				})
 			
-			if script.settings.timecode_from == script.constants.TIMECODE_FROM.GUIDE_TRACK_CLIP then
-				local left_offset = item:GetLeftOffset()
+				clips.Jobs[i] = queue_render_job(project, clip_to_render.Timeline, clip_to_render.Clip.Filename, script.settings.location)
 
-				if left_offset == nil then
-					-- Non-Fusion Titles, Non-Fusion Generators and Subtitles don't have an offset
-					--TODO: What about subclips and multicam clips? If they're generators?
-					new_file_start_frame = timeline_start_frame
-				else
-					local media_pool_item = item:GetMediaPoolItem()
-
-					if media_pool_item then
-						-- Media pool clips, Compound clips
-						--TODO: Subclips and Multicam clips
-						--Note: Subclips don't have the In/Out clip properties.
-						--      They also use Start/End clip properties as left/right offset compared to the full clip.
---						print("    Item                 Start TC: "..media_pool_item:GetClipProperty("Start TC"))
---						print("    Item              Start Frame: "..luaresolve:frame_from_timecode(media_pool_item:GetClipProperty("Start TC"), 24))
---						print("    Item                    Start: "..media_pool_item:GetClipProperty("Start"))
---						print("    Item                      End: "..media_pool_item:GetClipProperty("End"))
---						print("    Item               Start type: "..type(media_pool_item:GetClipProperty("Start")))
---						print("    Item                 End type: "..type(media_pool_item:GetClipProperty("End")))
---						print("    Item              left_offset: "..tostring(left_offset))
---						dump(media_pool_item:GetClipProperty())
-						-- For subclips we need to add the "Start" ClipProperty that acts as the left offset
-						new_file_start_frame = luaresolve:frame_from_timecode(media_pool_item:GetClipProperty("Start TC"), 24) + left_offset + media_pool_item:GetClipProperty("Start") --TODO: Frame rate of the timeline or of the clip?
-					else
-						-- Fusion clips, Adjustment clips
-						-- We'll use the timeline start frame
-						new_file_start_frame = timeline_start_frame + left_offset
-
-						-- Note: Adjustment clips have crazy offsets, don't know if it's by design or a bug,
-						-- they also seem to break the Data Burn-In feature for Source Timecode/Frame Number
-					end
-				end
-			elseif script.settings.timecode_from == script.constants.TIMECODE_FROM.CUSTOM then
-				new_file_start_frame = luaresolve:frame_from_timecode(script.settings.custom_timecode, 24) --TODO: Frame rate of the timeline or of the clip?
-			else
-				return timeline_start_timecode
-			end
-				
-			local timeline_offset_frame = new_file_start_frame - (item:GetStart() - timeline_start_frame)
---			print("    Item     new_file_start_frame: "..new_file_start_frame)
---			print("Timeline    timeline_offset_frame: "..timeline_offset_frame)
---			print("Timeline timeline_offset_timecode: "..luaresolve:timecode_from_frame(timeline_offset_frame, 24, false))
---			print()
-			return luaresolve:timecode_from_frame(timeline_offset_frame, 24, false) --TODO: Frame rate of the timeline or of the clip?
-		end
-
-		local function add_job_result(job_results, clip_number, items, render_settings, file_extension, status, start_timecode, end_timecode)
-			local function get_remaining_message()
-				if #items > clip_number then
-					local remaining_jobs = #items - clip_number
-					return string.format("%s remaining %s not added to the queue.", remaining_jobs, iif(remaining_jobs == 1, "job was", "jobs were"))
-				else
-					return ""
+				if clips.Jobs[i] == nil then
+					goto errorcleanup
 				end
 			end
+		
+			script.progress_window:Hide()
 
-			local message = ""
-
-			if status.JobStatus == "Failed" and status.Error then
-				message = status.Error
-
-				if windowItems.StopOnErrorCheckBox.Checked then
-					message = string.format("%s<br /><br />%s", message, get_remaining_message())
-				end
-			elseif status.JobStatus == "Cancelled" then
-				message = get_remaining_message()
-			end
-
-			job_results[#job_results+1] = string.format(
-				[[
-					<tr>
-						<td class="spacercell" colspan="3"></td>
-					</tr>
-					<tr>
-						<th class="headerleft" align="left" width="80">Clip %s</th>
-						<th align="left">%s - %s</th>
-						<th class="headerright" align="right" width="100">%s at %s%%</th>
-					</tr>
-					<tr>
-						<td class="cell" colspan="3">%s%s</td>
-					</tr>
-					<tr>
-						<td class="bottomcell" colspan="3">%s</td>
-					</tr>
-				]],
-				clip_number,
-				start_timecode, end_timecode,
-				status.JobStatus, status.CompletionPercentage,
-				render_settings.CustomName, file_extension,
-				message
-			)
-		end
-
-		for i, item in ipairs(items) do
-			-- Save the item timline timecode in case we're adjusting it later
-			local item_timeline_timecode_start = luaresolve:timecode_from_frame(item:GetStart(), 24, false) --TODO: Frame rate of the timeline or of the clip?
-			local item_timeline_timecode_end = luaresolve:timecode_from_frame(item:GetEnd(), 24, false) --TODO: Frame rate of the timeline or of the clip?
-
-			if script.settings.timecode_from == script.constants.TIMECODE_FROM.GUIDE_TRACK_CLIP or script.settings.timecode_from == script.constants.TIMECODE_FROM.CUSTOM then
-				--TODO: The offset trick doesn't work when we need to have the timeline start at a negative timecode
-				local new_start_timecode = get_timeline_offset(item)
-
-				if new_start_timecode ~= current_timeline_start_timecode then
-					--TODO: What happens when Live Save is on and we change the StartTimecode?
-					if not script:retry
-					{
-						func = timeline.SetStartTimecode,
-						arguments = { timeline, new_start_timecode },
-						message = "Couldn't change start timecode",
-						window = progress_window,
-					} then
-						goto errorcleanup
-					else
-						current_timeline_start_timecode = new_start_timecode
-					end
-				end
-			end
-
-			local renderSettings =
-			{
-				MarkIn = item:GetStart(),
-				MarkOut = item:GetEnd() - 1,
-				TargetDir = script.settings.location,
-				CustomName = filenames[i],
-
-				--UniqueFilenameStyle = 0, -- 0 - Prefix, 1 - Suffix
-			}
-
-			--TODO: Frame rate of the timeline or of the clip?
-			script:update_progress(progress_window, "ProgressUpdated",
-			{
-				Progress = 100 * (i - 1) / #items,
-				Status = string.format("Clip %s of %s as %s - %s",
-					i,
-					#items,
-					luaresolve:timecode_from_frame(item:GetStart(), 24, false),
-					luaresolve:timecode_from_frame(item:GetEnd(), 24, false))
-			})
-
-			if not script:retry
-			{
-				func = project.SetRenderSettings,
-				arguments = { project, renderSettings },
-				message = "Couldn't set render settings",
-				window = progress_window,
-			}
-			then
+			-- Render
+			if not luaresolve.start_rendering(project, clips.Jobs, false) then
 				goto errorcleanup
 			end
-			
-			local render_job_indexes = {}
-
-			render_job_indexes[#render_job_indexes+1] = script:retry
-			{
-				func = project.AddRenderJob,
-				arguments = { project },
-				message = string.format("Couldn't add render job for %s", renderSettings.CustomName),
-				window = progress_window,
-			}
-
-			if #render_job_indexes == 0 then
-				goto errorcleanup
-			end
-
-			if not script:retry
-			{
-				func = project.StartRendering,
-				arguments = { project, render_job_indexes, false },
-				message = "Couldn't start rendering",
-				window = progress_window,
-			}
-			then
-				goto errorcleanup
-			end
-
+		
+			-- Wait for renders to complete
 			while project:IsRenderingInProgress() do
 				script.sleep(1000)
 			end
 
-			if current_timeline_start_timecode ~= timeline_start_timecode then
-				if not script:retry
-				{
-					func = timeline.SetStartTimecode,
-					arguments = { timeline, timeline_start_timecode },
-					message = "Couldn't change start timecode",
-					window = progress_window,
-				}
-				then
-					goto errorcleanup
-				else
-					current_timeline_start_timecode = timeline_start_timecode
+			-- Delete render jobs
+			for i = 1, #clips.Jobs do
+				local clip = clips.ClipsToRender[i].Clip
+				local status = project:GetRenderJobStatus(clips.Jobs[i])
+
+				luaresolve.delete_render_job(project, clips.Jobs[i])
+				-- Note: We're not failing if we can't delete the render jobs, we just leave it
+
+				if status.JobStatus == "Failed" or status.JobStatus == "Cancelled" then
+					add_job_result(clips.Results, i, clip.Filename, file_extension, status, clip.Start.Timecode, clip.End.Timecode)
 				end
 			end
 
-			local status = project:GetRenderJobStatus(render_job_indexes[1])
+			-- Delete the temporary bin (and the timelines in it)
+			media_pool:DeleteFolders( { folder } )
 
-			if windowItems.ClearRendersCheckBox.Checked then
-				script:retry
-				{
-					func = project.DeleteRenderJob,
-					arguments = { project, render_job_indexes[1] },
-					message = "Couldn't clear completed render job",
-					window = progress_window,
-				}
+			media_pool:SetCurrentFolder(current_folder)
+			project:SetCurrentTimeline(t.Current)
 
-				-- Note: We're not failing if we can't clear the render job, we just leave it
+			::errorcleanup::
+			print("errorcleanup")
+
+			::done::
+			print("done")
+			script.dispatcher:ExitLoop()
+			script.progress_window:Hide()
+
+			if #clips.Results > 0 then
+				local html = string.format([[
+					<html>
+					<head>
+						<style>
+							h3
+							{
+								color: rgb(240, 240, 240);
+							}
+
+							th
+							{
+								font-weight: normal;
+								white-space: nowrap;
+								border-top: 1px solid black;
+								border-bottom: 1px solid black;
+								background-color: rgb(47, 49, 54);
+							}
+
+							td
+							{
+								border-left: 1px solid black;
+								border-right: 1px solid black;
+								background-color: rgb(47, 49, 54);
+							}
+
+							.headerleft
+							{
+								color: rgb(240, 240, 240);
+								border-left: 1px solid black;
+							}
+
+							.headerright
+							{
+								color: rgb(240, 132, 132);
+								border-right: 1px solid black;
+							}
+
+							.cell
+							{
+								font-weight: bold;
+								color: rgb(240, 240, 240);
+							}
+
+							.bottomcell
+							{
+								color: rgb(240, 132, 132);
+								border-bottom: 1px solid black;
+							}
+
+							.spacercell
+							{
+								border: none;
+								padding: 2px;
+								background-color: transparent;
+							}
+						</style>
+					</head>
+					<body>
+						<h3>%s of %s render job%s did not complete</h3>
+						<table width="100%%" cellspacing="0" cellpadding="8">
+							%s
+						</table>
+					</body>
+					</html>]], #clips.Results, #clips.Jobs, iif(#clips.Jobs > 1, "s", ""), table.concat(clips.Results, "\n"))
+
+				script:show_popup( { 400, 500 }, html, { "OK" } )
 			end
-
-			if status.JobStatus == "Failed" or status.JobStatus == "Cancelled" then
-				add_job_result(jobs.results, i, items, renderSettings, file_extension, status, item_timeline_timecode_start, item_timeline_timecode_end)
-
-				if status.JobStatus == "Failed" then
-					jobs.failed = jobs.failed + 1
-					script:update_progress(progress_window, "SecondaryHeaderUpdated", { Status = string.format("%s failed", jobs.failed) } )
-
-					if windowItems.StopOnErrorCheckBox.Checked then
-						break
-					end
-				elseif status.JobStatus == "Cancelled" then
-					break
-				end
-			elseif status.JobStatus == "Complete" then
-				jobs.completed = jobs.completed + 1
-			end
-		end
-
-		::errorcleanup::
-
-		if current_timeline_start_timecode ~= timeline_start_timecode then
-			print("Cleanup")
-
-			if not script:retry
-			{
-				func = timeline.SetStartTimecode,
-				arguments = { timeline, timeline_start_timecode },
-				message = "Couldn't change start timecode",
-				window = progress_window,
-			}
-			then
-				--TODO: Popup explaining that the timeline start timecode has to be changed back manually
-			else
-				print("Cleanup completed")
-				current_timeline_start_timecode = timeline_start_timecode
-			end
-		else
-			print("No cleanup necessary")
-		end
-
-		::done::
-		progress_window:Hide()
-
-		if #jobs.results > 0 then
-			local html = string.format([[
-				<html>
-				<head>
-					<style>
-						h3
-						{
-							color: rgb(240, 240, 240);
-						}
-
-						th
-						{
-							font-weight: normal;
-							white-space: nowrap;
-							border-top: 1px solid black;
-							border-bottom: 1px solid black;
-							background-color: rgb(47, 49, 54);
-						}
-
-						td
-						{
-							border-left: 1px solid black;
-							border-right: 1px solid black;
-							background-color: rgb(47, 49, 54);
-						}
-
-						.headerleft
-						{
-							color: rgb(240, 240, 240);
-							border-left: 1px solid black;
-						}
-
-						.headerright
-						{
-							color: rgb(240, 132, 132);
-							border-right: 1px solid black;
-						}
-
-						.cell
-						{
-							font-weight: bold;
-							color: rgb(240, 240, 240);
-						}
-
-						.bottomcell
-						{
-							color: rgb(240, 132, 132);
-							border-bottom: 1px solid black;
-						}
-
-						.spacercell
-						{
-							border: none;
-							padding: 2px;
-							background-color: transparent;
-						}
-					</style>
-				</head>
-				<body>
-					<h3>%s of %s render job%s did not complete</h3>
-					<table width="100%%" cellspacing="0" cellpadding="8">
-						%s
-					</table>
-				</body>
-				</html>]], #items - jobs.completed, #items, iif(#items > 1, "s", ""), table.concat(jobs.results, "\n"))
-
-			script:show_popup( { 400, 500 }, html, { "OK" } )
 		end
 
 		::exit::
+		print("exit")
 	end
 end
 
@@ -1880,14 +2063,14 @@ main()
 
 --print(script:show_popup( { 500, 200 }, "Test", { "Cancel", "OK", "Abort", "Close" } ))
 
---local progress_window = script:create_progress_window("Rendering")
---progress_window:Show()
+--script.progress_window = script:create_progress_window("Rendering")
+--script.progress_window:Show()
 --
 --for i = 0, 100 do
---	script:update_progress(progress_window, "ProgressUpdated", { Progress = i, Status = "File "..tostring(i) } )
---	script:update_progress(progress_window, "SecondaryProgressUpdated", { Progress = 100 - i, Status = "File "..tostring(i), Visible = iif(i >= 50, false, true) } )
+--	script:update_progress("ProgressUpdated", { Progress = i, Status = "File "..tostring(i) } )
+--	script:update_progress("SecondaryProgressUpdated", { Progress = 100 - i, Status = "File "..tostring(i), Visible = iif(i >= 50, false, true) } )
 --	script.sleep(50)
 --end
 --
 --script.dispatcher:ExitLoop()
---progress_window:Hide()
+--script.progress_window:Hide()
