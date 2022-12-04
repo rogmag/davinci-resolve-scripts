@@ -84,28 +84,14 @@ script =
 		local success = result ~= nil and result ~= false
 		local start_time = os.clock()
 		local timeout = iif(settings.timeout, settings.timeout, self.default_timeout)
-
-		if not success then
-			--TODO: Move the showing of the progress into the while loop and wait a few iterations before showing it.
-			--      This way we won't confuse the user with red flashing text when something is immediately successful after an initial fail.
-			local status = string.format("%s (Retrying %ss)", settings.message, timeout)
-			
-			if self.progress_window then
-				-- Show the progress bar window in case it's hidden (checking the Hidden property doesn't work)
-				self.progress_window:Show()
-
-				-- Make the secondary progress bar visible
-				script:update_progress("SecondaryProgressUpdated", { Progress = 100, Status = status, Visible = true } )
-			else
-				print(status)
-			end
-		end
+		local show_retry_progress_after = 3
+		local retry_progress_showing = false
 
 		while (not success) do
 			local elapsed_time = os.clock() - start_time
 			local time_left = timeout - elapsed_time
 
-			if (elapsed_time >= timeout) then
+			if elapsed_time >= timeout then
 				if self.progress_window then
 					--TODO: should we have a settings.continue_after_fail bool? Now we're closing the window even if we want to continue. 
 					-- Progress window
@@ -122,6 +108,15 @@ script =
 
 			if self.progress_window then
 				script:update_progress("SecondaryProgressUpdated", { Progress = 100 * time_left / timeout, Status = status } )
+				
+				if not retry_progress_showing and elapsed_time >= show_retry_progress_after then
+					-- Show the progress bar window in case it's hidden (checking the Hidden property doesn't work)
+					self.progress_window:Show()
+
+					-- Make the secondary progress bar visible
+					script:update_progress("SecondaryProgressUpdated", { Visible = true } )
+					retry_progress_showing = true
+				end
 			else
 				print(status)
 			end
@@ -468,8 +463,13 @@ script =
 		progress_items.SecondaryProgressBarStatus:Move( { (progress_margin - 1) / 2 - 1, progress_y_pos + progress_bottom_margin } )
 
 		prog_win.On[script.window_id.."Progress"].ProgressUpdated = function(ev)
-			progress_items.ProgressBarStatus.Text = ev.Status
-			progress_items.ProgressBar:Resize( { ev.Progress * (width - progress_margin) / 100, 1} )
+			if ev.Status then
+				progress_items.ProgressBarStatus.Text = ev.Status
+			end
+
+			if ev.Progress then
+				progress_items.ProgressBar:Resize( { ev.Progress * (width - progress_margin) / 100, 1} )
+			end
 		end
 	
 		prog_win.On[script.window_id.."Progress"].SecondaryProgressUpdated = function(ev)
@@ -479,8 +479,13 @@ script =
 				progress_items.SecondaryProgressBar.Visible = ev.Visible
 			end
 
-			progress_items.SecondaryProgressBarStatus.Text = ev.Status
-			progress_items.SecondaryProgressBar:Resize( { ev.Progress * (width - progress_margin) / 100, 1} )
+			if ev.Status then
+				progress_items.SecondaryProgressBarStatus.Text = ev.Status
+			end
+
+			if ev.Progress then
+				progress_items.SecondaryProgressBar:Resize( { ev.Progress * (width - progress_margin) / 100, 1} )
+			end
 		end
 		
 		prog_win.On[script.window_id.."Progress"].HeaderUpdated = function(ev)
