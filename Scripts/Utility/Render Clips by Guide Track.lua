@@ -1,5 +1,12 @@
 ﻿local script, luaresolve, libavutil
 
+-- Used for forcing an error at specific points by giving the
+-- user time to open a modal window, like Project Settings
+local function wait_for_user()
+	printerr("waiting")
+	script.sleep(4000)
+end
+
 script =
 {
 	filename = debug.getinfo(1,"S").source:match("^.*%@(.*)"),
@@ -84,7 +91,7 @@ script =
 		local success = result ~= nil and result ~= false
 		local start_time = os.clock()
 		local timeout = iif(settings.timeout, settings.timeout, self.default_timeout)
-		local show_retry_progress_after = 3
+		local show_retry_progress_after = 3 -- seconds
 		local retry_progress_showing = false
 
 		while (not success) do
@@ -656,6 +663,28 @@ luaresolve =
 		return track_names_by_type
 	end,
 
+	load_render_preset = function(project, render_preset)
+		return script:retry
+		{
+			func = project.LoadRenderPreset,
+			arguments = { project, render_preset },
+			message = "Couldn't load render preset",
+			message_detail = string.format("Couldn't load render preset \"%s\"", script.settings.render_preset)
+		}
+	end,
+
+	get_timelines_folder = function(media_pool)
+		local root_folder = media_pool:GetRootFolder()
+
+		for _, folder in ipairs(root_folder:GetSubFolderList()) do
+			if folder:GetName() == "Timelines" then -- Note: This should be ok for now, BMD doesn't translate this bin
+				return folder			
+			end
+		end
+
+		return root_folder
+	end,
+
 	get_path_by_media_pool_folder = function(media_pool, media_pool_folder)
 		local root_folder = media_pool:GetRootFolder()
 		local stack = table.pack(
@@ -723,13 +752,6 @@ luaresolve =
 				--TODO: We can still have false a match with duplicate timelines and compound clips if we can't use Type
 			)
 			then
-				--print("timeline UniqueId: "..timeline:GetUniqueId())
-				--print("    timeline Name: "..timeline:GetName())
-				--dump(timeline:GetSetting())
-				--print("    item UniqueId: "..clip:GetUniqueId())
-				--print("     item MediaId: "..clip:GetMediaId())
-				--print("        item Name: "..clip:GetName())
-				--dump(clip:GetClipProperty())
 				media_pool_item = clip
 			end
 		end
@@ -793,7 +815,7 @@ luaresolve =
 			func = project.AddRenderJob,
 			arguments = { project },
 			message = "Couldn't add render job",
-			message_detail = string.format("Couldn't add render job for \"%s\"", filename),
+			message_detail = iif(filename, string.format("Couldn't add render job for \"%s\"", filename), nil),
 		}
 	end,
 
@@ -822,15 +844,6 @@ luaresolve =
 			func = project.DeleteRenderJob,
 			arguments = { project, render_job_id },
 			message = "Couldn't delete render job",
-		}
-	end,
-
-	delete_timelines = function(media_pool, timelines) --TODO: Do we need this if we use the Timelines bin?
-		return script:retry
-		{
-			func = media_pool.DeleteTimelines,
-			arguments = { media_pool, timelines },
-			message = "Couldn't delete timelines",
 		}
 	end,
 }
@@ -1461,13 +1474,6 @@ local function create_window(project, timeline)
 	return window, windowItems
 end
 
--- Used for forcing an error at specific points by giving the
--- user time to open a modal window, like Project Settings
-local function wait_for_user()
-	printerr("waiting")
-	script.sleep(4000)
-end
-
 local function main()
 	local function populate_timeline_properties(t, media_pool, guide_track_settings)
 		assert(t and t.Current, "\"t.Current\" has to have a value before running populate_timeline_properties()")
@@ -1481,7 +1487,7 @@ local function main()
 		t.End =
 		{
 			Frame = t.Current:GetEndFrame(),
-			Timecode = luaresolve:timecode_from_frame(t.Current:GetEndFrame(), 24, false) --TODO: Only used for debug printing     --TODO: Frame rate of the timeline or of the clip?
+			Timecode = luaresolve:timecode_from_frame(t.Current:GetEndFrame(), 24, false)  --TODO: Frame rate of the timeline or of the clip?
 		}
 
 		t.MediaPoolItem = luaresolve:get_timeline_media_pool_item(media_pool, t.Current)
@@ -1502,15 +1508,6 @@ local function main()
 		else
 			t.Out.Frame = luaresolve:frame_from_timecode(t.Out.Timecode, 24) --TODO: Frame rate of the timeline or of the clip?
 		end
-
-		--t.Items = {}
-		--
-		--for _, item in ipairs(t.Current:GetItemListInTrack(guide_track_settings.track_data.type, guide_track_settings.track_data.index)) do
-		--	
-		--	if next(item:GetProperty()) then
-		--		t.Items[#t.Items+1] = item
-		--	end
-		--end
 	end
 
 	local function get_clips(t, filename_mode, custom_filename, guide_track_settings)
@@ -1571,7 +1568,7 @@ local function main()
 				return "Subtitle"
 			else
 				local item_name = item:GetName()
-		
+				
 				-- Trim or filter the item name file extension
 				if media_pool_item and #media_pool_item:GetClipProperty("File Path") > 0 then
 					local media_filename = media_pool_item:GetClipProperty("File Name")
@@ -1793,7 +1790,6 @@ local function main()
 		for i, clip_to_render in ipairs(clips.ClipsToRender) do
 			local clip = clip_to_render.Clip
 
-			--TODO: Frame rate of the timeline or of the clip?
 			script:update_progress("ProgressUpdated",
 			{
 				Progress = 100 * i / #clips.ClipsToRender,
@@ -1821,14 +1817,16 @@ local function main()
 		return true
 	end
 
-	local function queue_render_job(project, timeline, filename, location)
-		project:SetCurrentTimeline(timeline) --TODO: retry?
+	local function queue_render_job(project, timeline, settings)
+		if timeline then
+			project:SetCurrentTimeline(timeline)
+		end
 
-		if not luaresolve.set_render_settings(project, { TargetDir = location, CustomName = filename } ) then
+		if not luaresolve.set_render_settings(project, settings) then
 			return nil
 		end
 			
-		return luaresolve.add_render_job(project, filename)
+		return luaresolve.add_render_job(project, settings.CustomName)
 	end
 
 	local function add_job_result(job_results, clip_number, filename, file_extension, status, start_timecode, end_timecode)
@@ -1859,7 +1857,7 @@ local function main()
 
 	local project = assert(resolve:GetProjectManager():GetCurrentProject(), "Couldn't get current project")
 	local t = { Current = assert(project:GetCurrentTimeline(), "Couldn't get current timeline") } --TODO: Remove asserts
-	local window, windowItems = create_window(project, t.Current)
+	local window = create_window(project, t.Current)
 
 	window:Show()
 	local guide_track_settings = script.dispatcher:RunLoop()
@@ -1872,22 +1870,12 @@ local function main()
 		--       has opened a modal window, like Project Settings.
 
 		if script.settings.render_preset ~= script.constants.RENDER_PRESET.CURRENT_SETTINGS then
-			if not script:retry
-			{
-				func = project.LoadRenderPreset,
-				arguments = { project, script.settings.render_preset },
-				message = "Couldn't load render preset",
-				message_detail = string.format("Couldn't load render preset \"%s\"", script.settings.render_preset)
-			}
-			then
-				-- Note: LoadRenderPreset() triggers switch to the Deliver page
-				goto exit
+			if not luaresolve.load_render_preset(project, script.settings.render_preset) then
+				return
 			end
 		end
 
-		--TODO: Run this before opening the main window?
 		if project:GetCurrentRenderMode() == 0 then
-			-- Note: GetCurrentRenderMode() triggers switch to the Deliver page
 			-- 0 = Individual clips
 			-- 1 = Single clip
 		
@@ -1901,38 +1889,44 @@ local function main()
 				</body>
 				</html>]], { "OK" } )
 		
-			goto exit
+			return
 		end
 
 		do
 			local media_pool = project:GetMediaPool()
 			local current_folder = media_pool:GetCurrentFolder()
+			local timelines_folder = luaresolve.get_timelines_folder(media_pool)
 			populate_timeline_properties(t, media_pool, guide_track_settings)
-			local clips = get_clips(t, windowItems.FilenameComboBox.CurrentText, windowItems.CustomFilenameLineEdit.Text, guide_track_settings)
+			local clips = get_clips(t, script.settings.filename_from, script.settings.custom_filename, guide_track_settings)
 
 			if clips == nil then
-				goto exit
+				return
 			end
 
 			populate_item_properties(t, clips)
 			clips.Jobs = {}
 			clips.Results = {}
-			local file_extension = string.format(".%s", project:GetCurrentRenderFormatAndCodec().format) --TODO: retry?
+			
+			local file_extension = string.format(".%s", project:GetCurrentRenderFormatAndCodec().format)
+			local folder
 
-			resolve:OpenPage("media")
+			if script.settings.timecode_from ~= script.constants.TIMECODE_FROM.TIMELINE then
+				resolve:OpenPage("media")
 
-			-- Create a temporary bin
-			local folder = media_pool:AddSubFolder(media_pool:GetRootFolder(), bmd.createuuid())
-			media_pool:SetCurrentFolder(folder)
+				-- Create a temporary bin
+				folder = media_pool:AddSubFolder(timelines_folder, bmd.createuuid())
+				media_pool:SetCurrentFolder(folder)
 
-			script.progress_window:Show()
+				script.progress_window:Show()
 
-			-- We'll create all the timelines first before queuing render jobs so Resolve doesn't keep switching between pages
-			if not create_timelines(media_pool, t, clips) then
-				goto errorcleanup
+				-- We'll create all the timelines first before queuing render jobs so Resolve doesn't keep switching between pages
+				if not create_timelines(media_pool, t, clips) then
+					goto errorcleanup
+				end
+			else
+				script.progress_window:Show()
 			end
 
-			--resolve:OpenPage("deliver")
 			script:update_progress("HeaderUpdated", { Status = "Adding render jobs" } )
 
 			-- Now set up the render jobs
@@ -1943,13 +1937,19 @@ local function main()
 					Status = string.format("Job %s of %s", i, #clips.ClipsToRender)
 				})
 			
-				clips.Jobs[i] = queue_render_job(project, clip_to_render.Timeline, clip_to_render.Clip.Filename, script.settings.location)
+				clips.Jobs[i] = queue_render_job(project, clip_to_render.Timeline, 
+				{
+					TargetDir = script.settings.location,
+					CustomName = clip_to_render.Clip.Filename,
+					MarkIn = iif(script.settings.timecode_from == script.constants.TIMECODE_FROM.TIMELINE, clip_to_render.Clip.Start.Frame, nil),
+					MarkOut = iif(script.settings.timecode_from == script.constants.TIMECODE_FROM.TIMELINE, clip_to_render.Clip.End.Frame - 1, nil),
+				})
 
 				if clips.Jobs[i] == nil then
 					goto errorcleanup
 				end
 			end
-		
+
 			script.progress_window:Hide()
 
 			-- Render
@@ -1966,26 +1966,29 @@ local function main()
 			for i = 1, #clips.Jobs do
 				local clip = clips.ClipsToRender[i].Clip
 				local status = project:GetRenderJobStatus(clips.Jobs[i])
-
+			
 				luaresolve.delete_render_job(project, clips.Jobs[i])
 				-- Note: We're not failing if we can't delete the render jobs, we just leave it
-
+			
 				if status.JobStatus == "Failed" or status.JobStatus == "Cancelled" then
 					add_job_result(clips.Results, i, clip.Filename, file_extension, status, clip.Start.Timecode, clip.End.Timecode)
 				end
 			end
 
-			-- Delete the temporary bin (and the timelines in it)
-			media_pool:DeleteFolders( { folder } )
+			if script.settings.timecode_from ~= script.constants.TIMECODE_FROM.TIMELINE then
+				-- Delete the temporary bin (and the timelines in it)
+				media_pool:DeleteFolders( { folder } )
 
-			media_pool:SetCurrentFolder(current_folder)
-			project:SetCurrentTimeline(t.Current)
+				media_pool:SetCurrentFolder(current_folder)
+				project:SetCurrentTimeline(t.Current)
+			else
+				-- Here we would like to restore any In/Out points on the timeline since the
+				-- render settings will have changed them, but it's currently not possible.
+			end
 
 			::errorcleanup::
 			print("errorcleanup")
 
-			::done::
-			print("done")
 			script.dispatcher:ExitLoop()
 			script.progress_window:Hide()
 
@@ -2058,9 +2061,6 @@ local function main()
 				script:show_popup( { 400, 500 }, html, { "OK" } )
 			end
 		end
-
-		::exit::
-		print("exit")
 	end
 end
 
