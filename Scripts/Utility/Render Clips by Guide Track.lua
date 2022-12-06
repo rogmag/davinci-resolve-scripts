@@ -1,5 +1,9 @@
 ﻿local script, luaresolve, libavutil
 
+-- Note: Some DaVinci Resolve functions have to be called via the script:retry() function
+--       because they can't run if the automated project backup is starting or if the user
+--       has opened a modal window, like Project Settings.
+
 -- Used for forcing an error at specific points by giving the
 -- user time to open a modal window, like Project Settings
 local function wait_for_user()
@@ -622,8 +626,12 @@ luaresolve =
 
 		get_decimal = function(self, frame_rate_value)
 			local fraction = self:get_fraction(frame_rate_value)
-			return tonumber(string.format("%.2f", fraction.num / fraction.den))
-		end
+			return tonumber(string.format("%.3f", fraction.num / fraction.den))
+		end,
+
+		scale = function(val, frame_rate1, frame_rate2)
+			return val / (frame_rate1.num / frame_rate1.den) * (frame_rate2.num / frame_rate2.den)
+		end,
 	},
 
 	load_library = function(name_pattern)
@@ -639,7 +647,7 @@ luaresolve =
 	timecode_from_frame = function(self, frame, frame_rate, drop_frame)
 		return libavutil:av_timecode_make_string(0, frame, self.frame_rates:get_decimal(frame_rate),
 		{
-			AV_TIMECODE_FLAG_DROPFRAME = drop_frame,
+			AV_TIMECODE_FLAG_DROPFRAME = drop_frame == true or drop_frame == 1 or drop_frame == "1",
 			AV_TIMECODE_FLAG_24HOURSMAX = true,
 			AV_TIMECODE_FLAG_ALLOWNEGATIVE = false
 		})
@@ -1210,7 +1218,7 @@ local function create_window(project, timeline)
 						CursorPositionChanged = true
 					},
 					Text = iif(script.settings.custom_timecode, script.settings.custom_timecode, timeline:GetStartTimecode()),
-					InputMask = "99:99:99:99", -- Note: Dropframe timecode with a semicolon doesn't work here because of a bug in Qt (https://bugreports.qt.io/browse/QTBUG-1588)
+					InputMask = "99:99:99:99", -- Note: DropFrame timecode with a semicolon doesn't work here because of a bug in Qt (https://bugreports.qt.io/browse/QTBUG-1588)
 				},
 
 				ui:Label { MinimumSize = right_column_minimum_size, MaximumSize = right_column_maximum_size },
@@ -1478,6 +1486,10 @@ local function main()
 	local function populate_timeline_properties(t, media_pool, guide_track_settings)
 		assert(t and t.Current, "\"t.Current\" has to have a value before running populate_timeline_properties()")
 
+		t.FrameRate = luaresolve.frame_rates:get_decimal(t.Current:GetSetting("timelineFrameRate"))
+		t.FractionalFrameRate = luaresolve.frame_rates:get_fraction(t.FrameRate)
+		t.DropFrame = t.Current:GetSetting("timelineDropFrameTimecode") == "1"
+
 		t.Start = 
 		{
 			Frame = t.Current:GetStartFrame(),
@@ -1487,7 +1499,7 @@ local function main()
 		t.End =
 		{
 			Frame = t.Current:GetEndFrame(),
-			Timecode = luaresolve:timecode_from_frame(t.Current:GetEndFrame(), 24, false)  --TODO: Frame rate of the timeline or of the clip?
+			Timecode = luaresolve:timecode_from_frame(t.Current:GetEndFrame(), t.FrameRate, t.DropFrame),
 		}
 
 		t.MediaPoolItem = luaresolve:get_timeline_media_pool_item(media_pool, t.Current)
@@ -1499,14 +1511,14 @@ local function main()
 			t.In.Frame = t.Start.Frame
 			t.In.Timecode = t.Start.Timecode
 		else
-			t.In.Frame = luaresolve:frame_from_timecode(t.In.Timecode, 24) --TODO: Frame rate of the timeline or of the clip?
+			t.In.Frame = luaresolve:frame_from_timecode(t.In.Timecode, t.FrameRate)
 		end
 
 		if #t.Out.Timecode == 0 then
 			t.Out.Frame = t.End.Frame
-			t.Out.Timecode = luaresolve:timecode_from_frame(t.Out.Frame, 24, false) --TODO: Frame rate of the timeline or of the clip?
+			t.Out.Timecode = luaresolve:timecode_from_frame(t.Out.Frame, t.FrameRate, t.DropFrame)
 		else
-			t.Out.Frame = luaresolve:frame_from_timecode(t.Out.Timecode, 24) --TODO: Frame rate of the timeline or of the clip?
+			t.Out.Frame = luaresolve:frame_from_timecode(t.Out.Timecode, t.FrameRate)
 		end
 	end
 
@@ -1683,7 +1695,7 @@ local function main()
 		return clips
 	end
 
-	local function get_timeline_start(clip, timeline_start_frame, timeline_offset)
+	local function get_timeline_start_end(clip, t, timeline_offset)
 		local new_file_start_frame
 
 		if script.settings.timecode_from == script.constants.TIMECODE_FROM.GUIDE_TRACK_CLIP then
@@ -1692,7 +1704,7 @@ local function main()
 			if left_offset == nil then
 				-- Non-Fusion Titles, Non-Fusion Generators, Subtitles and Transitions don't have an offset
 				--TODO: What about subclips and multicam clips? If they're generators?
-				new_file_start_frame = timeline_start_frame
+				new_file_start_frame = t.Start.Frame
 			else
 				if clip.MediaPoolItem then
 					-- Media pool clips, Compound clips
@@ -1700,12 +1712,22 @@ local function main()
 					--Note: Subclips don't have the In/Out clip properties.
 					--      They also use Start/End clip properties as left/right offset compared to the full clip.
 
+					local start_tc = clip.MediaPoolItem:GetClipProperty("Start TC")
+					local start = clip.MediaPoolItem:GetClipProperty("Start")
+
+					if t.FrameRate ~= clip.FrameRate then
+						-- Scale "Start TC" and "Start" ClipProperties to the timeline frame rate
+						start_tc = string.format("%s%02d", start_tc:sub(1, 9), math.floor(luaresolve.frame_rates.scale(tonumber(start_tc:sub(-2)), clip.FractionalFrameRate, t.FractionalFrameRate)))
+						start = math.floor(luaresolve.frame_rates.scale(start, clip.FractionalFrameRate, t.FractionalFrameRate))
+						--TODO: Verify upscale/downscale
+					end
+
 					-- For subclips we need to add the "Start" ClipProperty that acts as the left offset
-					new_file_start_frame = luaresolve:frame_from_timecode(clip.MediaPoolItem:GetClipProperty("Start TC"), 24) + left_offset + clip.MediaPoolItem:GetClipProperty("Start") --TODO: Frame rate of the timeline or of the clip?
+					new_file_start_frame = luaresolve:frame_from_timecode(start_tc, t.FrameRate) + left_offset + start
 				else
 					-- Fusion clips, Adjustment clips
 					-- We'll use the timeline start frame
-					new_file_start_frame = timeline_start_frame + left_offset
+					new_file_start_frame = t.Start.Frame + left_offset
 
 					-- Note: Adjustment clips have crazy offsets, don't know if it's by design or a bug,
 					-- they also seem to break the Data Burn-In feature for Source Timecode/Frame Number
@@ -1714,12 +1736,12 @@ local function main()
 
 			new_file_start_frame = new_file_start_frame + timeline_offset
 		elseif script.settings.timecode_from == script.constants.TIMECODE_FROM.CUSTOM then
-			new_file_start_frame = luaresolve:frame_from_timecode(script.settings.custom_timecode, 24) + timeline_offset --TODO: Frame rate of the timeline or of the clip?
+			new_file_start_frame = luaresolve:frame_from_timecode(script.settings.custom_timecode, t.FrameRate) + timeline_offset
 		else
 			new_file_start_frame = clip.Start.Frame
 		end
 
-		return new_file_start_frame
+		return new_file_start_frame, new_file_start_frame + clip.End.Frame - clip.Start.Frame 
 	end
 
 	local function populate_item_properties(t, clips)
@@ -1746,31 +1768,44 @@ local function main()
 				item_end = t.Out.Frame + 1
 			end
 
+			local clip_frame_rate = t.FrameRate
+			local clip_fractional_frame_rate = luaresolve.frame_rates:get_fraction(clip_frame_rate)
+			local clip_drop_frame = t.DropFrame
+
+			if clip.MediaPoolItem then
+				clip_frame_rate = luaresolve.frame_rates:get_decimal(clip.MediaPoolItem:GetClipProperty("FPS"))
+				clip_fractional_frame_rate = luaresolve.frame_rates:get_fraction(clip_frame_rate)
+				clip_drop_frame = clip.MediaPoolItem:GetClipProperty("Drop frame") == "1" --TODO: Are these translated?
+			end
+
+			clip.FrameRate = clip_frame_rate
+			clip.FractionalFrameRate = clip_fractional_frame_rate
+			clip.DropFrame = clip_drop_frame
+
 			clip.Start =
 			{
 				Frame = item_start,
-				Timecode = luaresolve:timecode_from_frame(item_start, 24, false)  --TODO: Frame rate of the timeline or of the clip?
+				Timecode = luaresolve:timecode_from_frame(item_start, t.FrameRate, t.DropFrame)
 			}
 
 			clip.End = 
 			{
 				Frame = item_end,
-				Timecode = luaresolve:timecode_from_frame(item_end, 24, false)  --TODO: Frame rate of the timeline or of the clip?
+				Timecode = luaresolve:timecode_from_frame(item_end, t.FrameRate, t.DropFrame)
 			}
 			
-			local new_timeline_start_frame = get_timeline_start(clip, t.Start.Frame, timeline_offset)
-			local new_timeline_start_timecode = luaresolve:timecode_from_frame(new_timeline_start_frame, 24, false)  --TODO: Frame rate of the timeline or of the clip?
+			local new_timeline_start_frame, new_timeline_end_frame = get_timeline_start_end(clip, t, timeline_offset)
 
 			clip.TimelineStart =
 			{
-				Frame = luaresolve:frame_from_timecode(new_timeline_start_timecode, 24),  --TODO: Frame rate of the timeline or of the clip?
-				Timecode = new_timeline_start_timecode
+				Frame = new_timeline_start_frame,
+				Timecode = luaresolve:timecode_from_frame(new_timeline_start_frame, t.FrameRate, t.DropFrame)
 			}
 
 			clip.TimelineEnd =
 			{
-				Frame = new_timeline_start_frame + item:GetDuration(),
-				Timecode = luaresolve:timecode_from_frame(new_timeline_start_frame + item:GetDuration(), 24, false)  --TODO: Frame rate of the timeline or of the clip?
+				Frame = new_timeline_end_frame,
+				Timecode = luaresolve:timecode_from_frame(new_timeline_end_frame, t.FrameRate, t.DropFrame)
 			}
 
 			if render_clip then
@@ -1865,9 +1900,6 @@ local function main()
 
 	if guide_track_settings then
 		script:create_progress_window("Creating timelines")
-		-- Note: Some DaVinci Resolve functions have to be called via the script:retry() function
-		--       because they can't run if the automated project backup is starting or if the user
-		--       has opened a modal window, like Project Settings.
 
 		if script.settings.render_preset ~= script.constants.RENDER_PRESET.CURRENT_SETTINGS then
 			if not luaresolve.load_render_preset(project, script.settings.render_preset) then

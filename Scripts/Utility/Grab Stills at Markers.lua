@@ -92,7 +92,7 @@ luaresolve =
 
 		get_decimal = function(self, frame_rate_value)
 			local fraction = self:get_fraction(frame_rate_value)
-			return tonumber(string.format("%.2f", fraction.num / fraction.den))
+			return tonumber(string.format("%.3f", fraction.num / fraction.den))
 		end
 	},
 
@@ -109,7 +109,7 @@ luaresolve =
 	timecode_from_frame = function(self, frame, frame_rate, drop_frame)
 		return libavutil:av_timecode_make_string(0, frame, self.frame_rates:get_decimal(frame_rate),
 		{
-			AV_TIMECODE_FLAG_DROPFRAME = drop_frame,
+			AV_TIMECODE_FLAG_DROPFRAME = drop_frame == true or drop_frame == 1 or drop_frame == "1",
 			AV_TIMECODE_FLAG_24HOURSMAX = true,
 			AV_TIMECODE_FLAG_ALLOWNEGATIVE = false
 		})
