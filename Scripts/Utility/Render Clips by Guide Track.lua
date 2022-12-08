@@ -11,6 +11,8 @@ local function wait_for_user()
 	script.sleep(4000)
 end
 
+--TODO: Support frame rates above 100 (three characters in the frame part of a timecode)
+
 script =
 {
 	filename = debug.getinfo(1,"S").source:match("^.*%@(.*)"),
@@ -789,18 +791,110 @@ luaresolve =
 		}
 	end,
 
-	create_timeline_from_clips = function(media_pool, name, clip_info)
+	set_timeline_setting = function(timeline, key, value)
 		return script:retry
 		{
-			func = media_pool.CreateTimelineFromClips,
+			func = timeline.SetSetting,
+			arguments =
+			{
+				timeline,
+				key,
+				value
+			},
+			message = "Couldn't set timeline setting",
+			message_detail = string.format("Couldn't set timeline setting \"%s\" to \"%s\"", key, value),
+		}
+	end,
+
+	create_empty_timeline = function(self, media_pool, name, template_timeline)
+		local new_timeline = script:retry
+		{
+			func = media_pool.CreateEmptyTimeline,
 			arguments =
 			{
 				media_pool,
-				name,
-				clip_info
+				name
 			},
 			message = "Couldn't create timeline",
 			message_detail = string.format("Couldn't create timeline \"%s\"", name),
+		}
+
+		if not new_timeline then
+			return false
+		else
+			if template_timeline then
+				local template_timeline_settings = template_timeline:GetSetting()
+				
+				if (template_timeline_settings.useCustomSettings == "1") then
+					-- Some of the settings have to be set in a specific order for them to work,
+					-- so we'll set all the known settings in order.
+					local settings_order = 
+					{
+						"useCustomSettings",
+
+						-- Format
+						"timelineResolutionWidth",
+						"timelineResolutionHeight",
+						"timelinePixelAspectRatio",
+						"timelineFrameRate",
+						"timelineDropFrameTimecode",
+						"timelineInterlaceProcessing",
+						"timelineInputResMismatchBehavior",
+
+						-- Monitor
+						"videoMonitorFormat",
+						"videoMonitorUse444SDI",
+						"videoMonitorUseLevelA",
+						"videoMonitorUseStereoSDI",
+						"videoMonitorSDIConfiguration",
+						"videoDataLevels",
+						"videoDataLevelsRetainSubblockAndSuperWhiteData",
+						"videoMonitorBitDepth",
+						"videoMonitorScaling",
+						"videoMonitorUseMatrixOverrideFor422SDI",
+						"videoMonitorMatrixOverrideFor422SDI",
+						"videoMonitorUseHDROverHDMI",
+
+						-- Output
+						"timelineOutputResMatchTimelineRes",
+						"timelineOutputResolutionWidth",
+						"timelineOutputResolutionHeight",
+						"timelineOutputPixelAspectRatio",
+						"timelineOutputResMismatchBehavior",
+						"superScale",
+					}
+
+					for _, key in ipairs(settings_order) do
+						if not self.set_timeline_setting(new_timeline, key, template_timeline_settings[key]) then
+							return false
+						end
+
+						template_timeline_settings[key] = nil
+					end
+
+					-- Any remaining settings
+					for key, value in pairs(template_timeline_settings) do
+						if not self.set_timeline_setting(timeline, key, value) then
+							return false
+						end
+					end
+				end
+			end
+
+			return new_timeline
+		end
+	end,
+
+	append_to_timeline = function(media_pool, clip_info)
+		return script:retry
+		{
+			func = media_pool.AppendToTimeline,
+			arguments =
+			{
+				media_pool,
+				clip_info
+			},
+			message = "Couldn't append clips to the current timeline",
 		}
 	end,
 
@@ -1831,18 +1925,21 @@ local function main()
 				Status = string.format("Timeline %s of %s as %s - %s", i, #clips.ClipsToRender, clip.TimelineStart.Timecode, clip.TimelineEnd.Timecode)
 			})
 			
-			clip_to_render.Timeline = luaresolve.create_timeline_from_clips(media_pool, string.format("[%s] %s", i, bmd.createuuid()),
-			{
-				{
-					mediaPoolItem = t.MediaPoolItem,
-					startFrame = clip.Start.Frame - t.Start.Frame,
-					endFrame = clip.End.Frame - t.Start.Frame - 1
-				}
-			})
+			clip_to_render.Timeline = luaresolve:create_empty_timeline(media_pool, string.format("[%s] %s", i, bmd.createuuid()), t.Current)
 
 			if clip_to_render.Timeline == nil then
 				return nil
 			else
+				if not luaresolve.append_to_timeline(media_pool, {
+				{
+					mediaPoolItem = t.MediaPoolItem,
+					startFrame = clip.Start.Frame - t.Start.Frame,
+					endFrame = clip.End.Frame - t.Start.Frame - 1
+				}})
+				then
+					return nil
+				end
+
 				if not luaresolve.set_start_timecode(clip_to_render.Timeline, clip.TimelineStart.Timecode) then
 					return nil
 				end
