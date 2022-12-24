@@ -1915,6 +1915,28 @@ local function main()
 		end
 	end
 
+	local function delete_empty_tracks(timeline)
+		--TODO: retry
+
+		local track_types = { "audio", "video", "subtitle" }
+
+		for _, track_type in ipairs(track_types) do
+			local track_count = timeline:GetTrackCount(track_type)
+
+			if track_count > 1 then
+				for i = track_count, 2, -1 do
+					if #timeline:GetItemListInTrack(track_type, i) == 0 then
+						if timeline:DeleteTrack(track_type, i) then
+							print(string.format("Deleted %s track %s", track_type, i))
+						else
+							printerr(string.format("Couldn't delete %s track %s", track_type, i))
+						end
+					end
+				end
+			end
+		end
+	end
+
 	local function create_timelines(media_pool, t, clips)
 		for i, clip_to_render in ipairs(clips.ClipsToRender) do
 			local clip = clip_to_render.Clip
@@ -1930,14 +1952,34 @@ local function main()
 			if clip_to_render.Timeline == nil then
 				return nil
 			else
+				local timeline_audio_channels = t.MediaPoolItem:GetClipProperty("Audio Ch")
+				
+				if timeline_audio_channels ~= "2" then
+					-- Add a new audio track with the correct number of channels
+					clip_to_render.Timeline:AddTrack("audio", string.format("adaptive%s", timeline_audio_channels)) --TODO: retry
+
+					-- Delete the existing audio track
+					clip_to_render.Timeline:DeleteTrack("audio", 1) --TODO: retry
+
+					--TODO: Set Bus format
+					--      Our timeline audio output will still be 2 channels unless we change the bus format.
+					--      Even though Fairlight seems to have a number of scriptable actions, they are not documented by BMD.
+				end
+
 				if not luaresolve.append_to_timeline(media_pool, {
 				{
 					mediaPoolItem = t.MediaPoolItem,
 					startFrame = clip.Start.Frame - t.Start.Frame,
-					endFrame = clip.End.Frame - t.Start.Frame - 1
+					endFrame = clip.End.Frame - t.Start.Frame - 1,
 				}})
 				then
 					return nil
+				end
+
+				if timeline_audio_channels ~= "2" then
+					-- Not sure why, but Resolve adds a new audio track to the timeline sometimes when 
+					-- executing AppendToTimeline, even on a completely empty timeline, so we'll remove any extra tracks.
+					delete_empty_tracks(clip_to_render.Timeline)
 				end
 
 				if not luaresolve.set_start_timecode(clip_to_render.Timeline, clip.TimelineStart.Timecode) then
@@ -1962,6 +2004,12 @@ local function main()
 	end
 
 	local function add_job_result(job_results, clip_number, filename, file_extension, status, start_timecode, end_timecode)
+		local status_text = string.format("%s at %s%%", status.JobStatus, status.CompletionPercentage)
+
+		if status.JobStatus == "Cancelled" and status.CompletionPercentage == 0 then
+			status_text = "Cancelled"
+		end
+
 		job_results[#job_results+1] = string.format(
 			[[
 				<tr>
@@ -1970,7 +2018,7 @@ local function main()
 				<tr>
 					<th class="headerleft" align="left" width="80">Clip %s</th>
 					<th align="left">%s - %s</th>
-					<th class="headerright" align="right" width="100">%s at %s%%</th>
+					<th class="headerright" align="right" width="100">%s</th>
 				</tr>
 				<tr>
 					<td class="cell" colspan="3">%s%s</td>
@@ -1981,7 +2029,7 @@ local function main()
 			]],
 			clip_number,
 			start_timecode, end_timecode,
-			status.JobStatus, status.CompletionPercentage,
+			status_text,
 			filename, file_extension,
 			iif(status.JobStatus == "Failed" and status.Error, status.Error, "")
 		)
@@ -2106,7 +2154,7 @@ local function main()
 
 			if script.settings.timecode_from ~= script.constants.TIMECODE_FROM.TIMELINE then
 				-- Delete the temporary bin (and the timelines in it)
-				media_pool:DeleteFolders( { folder } )
+--				media_pool:DeleteFolders( { folder } )
 
 				media_pool:SetCurrentFolder(current_folder)
 				project:SetCurrentTimeline(t.Current)
