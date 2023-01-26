@@ -54,5 +54,5 @@ function Deploy-Files
 	Write-Host("")
 }
 
-Deploy-Files -Source ("{0}Modules/Lua/*" -f $ProjectPath) -Destination "$resolveFusion/Modules/Lua/"
+#Deploy-Files -Source ("{0}Modules/Lua/*" -f $ProjectPath) -Destination "$resolveFusion/Modules/Lua/"
 Deploy-Files -Source ("{0}Scripts/*" -f $ProjectPath) -Destination "$resolveFusion/Scripts/"
