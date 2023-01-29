@@ -1,4 +1,32 @@
-﻿local script, luaresolve, libavutil
+﻿--[[
+
+MIT License
+
+Copyright (c) 2023 Roger Magnusson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-----------------------------------------------------------------------------
+
+]]
+
+local script, luaresolve, libavutil
 
 -- Note: Some DaVinci Resolve functions have to be called via the script:retry() function
 --       because they can't run if the automated project backup is starting or if the user
@@ -10,8 +38,6 @@ local function wait_for_user()
 	printerr("waiting")
 	script.sleep(4000)
 end
-
---TODO: Support frame rates above 100 (three characters in the frame part of a timecode)
 
 script =
 {
@@ -575,60 +601,31 @@ luaresolve =
 {
 	frame_rates =
 	{
-		[16] = { num = 1600, den = 100, },
-		[18] = { num = 1800, den = 100 },
-		[23.976] = { num = 24000, den = 1001 },
-		[24] = { num = 2400, den = 100 },
-		[25] = { num = 2500, den = 100 },
-		[29.97] = { num = 30000, den = 1001 },
-		[30] = { num = 3000, den = 100 },
-		[47.952] = { num = 48000, den = 1001 },
-		[48] = { num = 4800, den = 100 },
-		[50] = { num = 5000, den = 100 },
-		[59.94] = { num = 60000, den = 1001 },
-		[60] = { num = 6000, den = 100 },
-		[72] = { num = 7200, den = 100 },
-		[95.904] = { num = 96000, den = 1001 },
-		[96] = { num = 9600, den = 100 },
-		[100] = { num = 10000, den = 100 },
-		[119.88] = { num = 120000, den = 1001 },
-		[120] = { num = 12000, den = 100 },
+		get_fraction = function(self, frame_rate_string_or_number)
+			local frame_rate = tonumber(tostring(frame_rate_string_or_number))
+			-- These are the frame rates that DaVinci Resolve Studio supports as of version 18
+			local frame_rates = { 16, 18, 23.976, 24, 25, 29.97, 30, 47.952, 48, 50, 59.94, 60, 72, 95.904, 96, 100, 119.88, 120 }
 
-		get_fraction = function(self, frame_rate_value)
-			if (type(frame_rate_value) == "string") then
-				frame_rate_value = tonumber(frame_rate_value)
+			for _, current_frame_rate in ipairs (frame_rates) do
+				if current_frame_rate == frame_rate or math.floor(current_frame_rate) == frame_rate then
+					local is_decimal = current_frame_rate % 1 > 0
+					local denominator = iif(is_decimal, 1001, 100)
+					local numerator = math.ceil(current_frame_rate) * iif(is_decimal, 1000, denominator)
+					return { num = numerator, den = denominator }
+				end
 			end
-		
-			if (self[frame_rate_value] == nil) then
-				-- Workaround for missing decimals in the timelineFrameRate setting in Resolve on Windows
-				-- when the timeline was created while Windows was set to another regional format
-				if ((frame_rate_value + 1) % 24 == 0) then
-					local factor = (frame_rate_value + 1) / 24 
-				
-					return
-					{
-						num = 24000 * factor,
-						den = 1001
-					}
-				elseif ((frame_rate_value + 1) % 30 == 0) then
-					local factor = (frame_rate_value + 1) / 30 
-				
-					return
-					{
-						num = 30000 * factor,
-						den = 1001
-					}
-				else
-					error(string.format("%s is not a supported frame rate", frame_rate_value))
-				end    
-			else
-				return self[frame_rate_value]
-			end
+
+			return nil, string.format("Invalid frame rate: %s", frame_rate_string_or_number)
 		end,
 
-		get_decimal = function(self, frame_rate_value)
-			local fraction = self:get_fraction(frame_rate_value)
-			return tonumber(string.format("%.3f", fraction.num / fraction.den))
+		get_decimal = function(self, frame_rate_string_or_number)
+			local fractional_frame_rate, error_message = self:get_fraction(frame_rate_string_or_number)
+			
+			if fractional_frame_rate ~= nil then
+				return tonumber(string.format("%.3f", fractional_frame_rate.num / fractional_frame_rate.den))
+			else
+				return nil, error_message
+			end
 		end,
 
 		scale = function(val, frame_rate1, frame_rate2)

@@ -1,5 +1,31 @@
 ﻿--[[
+
+MIT License
+
+Copyright (c) 2023 Roger Magnusson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-----------------------------------------------------------------------------
+
 	roger.magnusson@gmail.com
+
 ]]
 
 local script =
@@ -20,25 +46,31 @@ luaresolve =
 {
 	frame_rates =
 	{
-		get_fraction = function(self, fps_string_or_number)
-			local str_fps = tostring(fps_string_or_number)    
+		get_fraction = function(self, frame_rate_string_or_number)
+			local frame_rate = tonumber(tostring(frame_rate_string_or_number))
+			-- These are the frame rates that DaVinci Resolve Studio supports as of version 18
 			local frame_rates = { 16, 18, 23.976, 24, 25, 29.97, 30, 47.952, 48, 50, 59.94, 60, 72, 95.904, 96, 100, 119.88, 120 }
 
-			for _, frame_rate in ipairs (frame_rates) do
-				if tostring(frame_rate) == str_fps or tostring(math.floor(frame_rate)) == str_fps then
-					local is_decimal = frame_rate % 1 > 0
+			for _, current_frame_rate in ipairs (frame_rates) do
+				if current_frame_rate == frame_rate or math.floor(current_frame_rate) == frame_rate then
+					local is_decimal = current_frame_rate % 1 > 0
 					local denominator = iif(is_decimal, 1001, 100)
-					local numerator = math.ceil(frame_rate) * iif(is_decimal, 1000, denominator)
+					local numerator = math.ceil(current_frame_rate) * iif(is_decimal, 1000, denominator)
 					return { num = numerator, den = denominator }
 				end
 			end
 
-			return { num = nil, den = nil }
+			return nil, string.format("Invalid frame rate: %s", frame_rate_string_or_number)
 		end,
 
-		get_decimal = function(self, frame_rate_value)
-			local fraction = self:get_fraction(frame_rate_value)
-			return tonumber(string.format("%.3f", fraction.num / fraction.den))
+		get_decimal = function(self, frame_rate_string_or_number)
+			local fractional_frame_rate, error_message = self:get_fraction(frame_rate_string_or_number)
+			
+			if fractional_frame_rate ~= nil then
+				return tonumber(string.format("%.3f", fractional_frame_rate.num / fractional_frame_rate.den))
+			else
+				return nil, error_message
+			end
 		end,
 	},
 
@@ -63,30 +95,24 @@ luaresolve =
 
 	time_from_frame = function(self, frame, frame_rate)
 		local fractional_frame_rate = self.frame_rates:get_fraction(frame_rate)
-		local fps = fractional_frame_rate.num / fractional_frame_rate.den
 
-		local hours = math.floor(frame / fps / 60 / 60)
-		local minutes = math.floor(frame / fps / 60) % 60
-		local seconds = math.floor(frame / fps) % 60
-		local milliseconds = 1000 * frame / fps % 1000
-		local milliseconds_rounded = tonumber(string.format("%.3f", milliseconds / 1000):sub(3))
+		-- Time is rounded to the nearest millisecond
+		local total_milliseconds = tonumber(string.format("%.0f", 1000 * frame / (fractional_frame_rate.num / fractional_frame_rate.den)))
 		
-		if math.ceil(milliseconds) == 1000 and milliseconds_rounded == 0 then
-			if seconds == 59 then
-				seconds = 0
-				
-				if minutes == 59 then
-					minutes = 0
-					hours = hours + 1
-				else
-					minutes = minutes + 1
-				end
-			else
-				seconds = seconds + 1
-			end
-		end
-
-		return string.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds_rounded)
+		local hours = math.floor(total_milliseconds / 1000 / 60 / 60)
+		local minutes = math.floor(total_milliseconds / 1000 / 60) % 60
+		local seconds = math.floor(total_milliseconds / 1000) % 60
+		local milliseconds = total_milliseconds % 1000
+		
+		return
+		{
+			time = string.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds),
+			hours = hours,
+			minutes = minutes,
+			seconds = seconds,
+			milliseconds = milliseconds,
+			total_milliseconds = total_milliseconds,
+		}
 	end,
 }
 
@@ -131,7 +157,7 @@ libavutil =
 			flags = bor_number_flags("enum AVTimecodeFlag", flags),
 			fps = math.ceil(luaresolve.frame_rates:get_decimal(fps))
 		})
-	
+
 		local timecodestring = ffi.string(self.library.av_timecode_make_string(tc, ffi.string(string.rep(" ", 16)), frame))
 	
 		if (#timecodestring > 0) then
@@ -268,9 +294,9 @@ local function main()
 
 		item.Text[0] = timeline:GetName()
 		item.Text[1] = tostring(frames)
-		item.Text[2] = string.format("%s%s", frame_rate, iif(frame_rate % 29.97 == 0, iif(drop_frame, " DF", " NDF"), ""))
+		item.Text[2] = string.format("%.3f%s", frame_rate, iif(drop_frame, " DF", ""))
 		item.Text[3] = luaresolve:timecode_from_frame(frames, frame_rate, drop_frame)
-		item.Text[4] = luaresolve:time_from_frame(frames, frame_rate)
+		item.Text[4] = luaresolve:time_from_frame(frames, frame_rate).time
 		item:SetData(0, "UserRole", i) -- Store the index of the timeline in the data for column 0
 
 		window_items.TimelinesTreeView:AddTopLevelItem(item)
@@ -280,7 +306,7 @@ local function main()
 		end
 	end
 
-	window_items.TimelinesTreeView:SetHeaderLabels( { "Name", "Frames", "Frame Rate", "Duration (TC)", "Duration (Time)" } )
+	window_items.TimelinesTreeView:SetHeaderLabels( { "Name", "Frames", "FPS", "Duration (TC)", "Duration (Time)" } )
 	window_items.TimelinesTreeView:SortByColumn(0, "AscendingOrder")
 	window:Show()
 	
