@@ -24,7 +24,13 @@ SOFTWARE.
 
 -----------------------------------------------------------------------------
 
+
+	A script that shows the duration of all timelines in a project using frames, timecode and real time.
+	This is useful for learning the real duration of a timeline when using a fractional frame rate, as it 
+	doesn't correspond exactly to its timecode.
+
 	roger.magnusson@gmail.com
+
 
 ]]
 

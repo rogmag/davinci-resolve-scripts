@@ -24,6 +24,21 @@ SOFTWARE.
 
 -----------------------------------------------------------------------------
 
+
+	A script that allows you to grab stills from timeline markers and optionally export them to a folder.
+
+	This script also highlights an issue with scripting in Resolve. There's no way to lock the user
+	interface while the script is running and if the user opens a modal window, like Project Settings,
+	most of the scriptable operations will fail. What's even worse, if the automatic backup kicks in when
+	a script is running, the script will also fail.
+
+	Many functions in the Resolve API can return a status so you can check if it succeeded or not, but I
+	think what we really need is a way to lock the GUI and for backups to be postponed while running. Just
+	like what happens when you're rendering a file.
+
+	roger.magnusson@gmail.com
+
+
 ]]
 
 local script, luaresolve, libavutil

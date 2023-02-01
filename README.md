@@ -16,16 +16,27 @@ Double click a timeline to switch to it.
 
 DaVinci Resolve comes with binaries for libavcodec, libavformat and libavutil.
 
-This script is an example of how we can take advantage of having those libraries available to LuaJIT.
+This script is an example of how we can take advantage of having those libraries available to LuaJIT
+in Resolve.
 
-Specifically we'll use av_timecode_make_string() and av_timecode_init_from_string() to create and parse timecode.
+Specifically we'll use av_timecode_make_string() and av_timecode_init_from_string() to create and
+parse timecode.
 
-Be aware that DaVinci Resolve currently comes with libavutil-56, which creates incorrect timecode for 119.88fps
-drop frame (or any frame rate with drop frame above 59.94fps).
+Be aware that DaVinci Resolve currently comes with libavutil-56, which creates incorrect timecode for
+119.88fps drop frame (or any frame rate with drop frame above 59.94fps).
 
 ## Scripts/Utility/Grab Stills at Markers
 
-TODO
+A script that allows you to grab stills from timeline markers and optionally export them to a folder.
+
+This script also highlights an issue with scripting in Resolve. There's no way to lock the user
+interface while the script is running and if the user opens a modal window, like Project Settings,
+most of the scriptable operations will fail. What's even worse, if the automatic backup kicks in when
+a script is running, the script will also fail.
+
+Many functions in the Resolve API can return a status so you can check if it succeeded or not, but I
+think what we really need is a way to lock the GUI and for backups to be postponed while running. Just
+like what happens when you're rendering a file.
 
 ## Scripts/Utility/Timeline Duration
 
@@ -33,11 +44,7 @@ A script that shows the duration of all timelines in a project using frames, tim
 This is useful for learning the real duration of a timeline when using a fractional frame rate, as it 
 doesn't correspond exactly to its timecode.
 
-## Scripts/Utility/Render Clips by Guide Track
+## Scripts in Development
 
-TODO
-
-## Scripts/Edit/Timeline as 3D Shapes
-
-TODO
-
+* Scripts/Utility/Render Clips by Guide Track
+* Scripts/Edit/Timeline as 3D Shapes
