@@ -334,18 +334,34 @@ local function create_window(marker_count_by_color, still_album_name)
 	local left_column_minimum_size = { 100, 0 }
 	local left_column_maximum_size = { 100, 16777215 }
 
-	local window = dispatcher:AddWindow(
+	local window_flags = nil
+
+	if ffi.os == "Windows" then
+		window_flags = 	
+		{
+			Window = true,
+			CustomizeWindowHint = true,
+			WindowCloseButtonHint = true,
+		}
+	elseif ffi.os == "Linux" then
+		window_flags = 
+		{
+			Window = true,
+		}
+	elseif ffi.os == "OSX" then
+		window_flags = 
+		{
+			Dialog = true,
+		}
+	end
+
+	local window = dispatcher:AddDialog(
 	{
 		ID = script.window_id,
 		WindowTitle = script.name,
-		WindowFlags =
-		{
-			Dialog = true,
-			WindowTitleHint = true,
-			WindowCloseButtonHint = true,
-		},
+		WindowFlags = window_flags,
 
-		WindowModality = "WindowModal",
+		WindowModality = "ApplicationModal",
 
 		Events = 
 		{

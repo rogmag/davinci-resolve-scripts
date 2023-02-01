@@ -34,6 +34,8 @@ SOFTWARE.
 	Double click a timeline to switch to it.
 
 	roger.magnusson@gmail.com
+
+
 ]]
 
 local script =
@@ -49,18 +51,34 @@ local function create_window()
 	local ui = script.ui
 	local dispatcher = script.dispatcher
 
-	local window = dispatcher:AddWindow(
+	local window_flags = nil
+
+	if ffi.os == "Windows" then
+		window_flags = 	
+		{
+			Window = true,
+			CustomizeWindowHint = true,
+			WindowCloseButtonHint = true,
+			WindowMaximizeButtonHint = true,
+		}
+	elseif ffi.os == "Linux" then
+		window_flags = 
+		{
+			Window = true,
+		}
+	elseif ffi.os == "OSX" then
+		window_flags = 
+		{
+			Dialog = true,
+		}
+	end
+
+	local window = dispatcher:AddDialog(
 	{
 		ID = script.window_id,
 		WindowTitle = script.name,
-		WindowFlags =
-		{
-			Dialog = true,
-			WindowTitleHint = true,
-			WindowCloseButtonHint = true,
-		},
-
-		WindowModality = "WindowModal",
+		WindowFlags = window_flags,
+		WindowModality = "ApplicationModal",
 
 		Events = 
 		{
@@ -68,7 +86,7 @@ local function create_window()
 			KeyPress = true,
 		},
 
-		FixedSize = { 300, 400 },
+		FixedSize = { 350, 400 },
 		
 		ui:VGroup
 		{

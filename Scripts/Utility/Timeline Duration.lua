@@ -200,18 +200,34 @@ local function create_window()
 	local ui = script.ui
 	local dispatcher = script.dispatcher
 
-	local window = dispatcher:AddWindow(
+	local window_flags = nil
+
+	if ffi.os == "Windows" then
+		window_flags = 	
+		{
+			Window = true,
+			CustomizeWindowHint = true,
+			WindowCloseButtonHint = true,
+			WindowMaximizeButtonHint = true,
+		}
+	elseif ffi.os == "Linux" then
+		window_flags = 
+		{
+			Window = true,
+		}
+	elseif ffi.os == "OSX" then
+		window_flags = 
+		{
+			Dialog = true,
+		}
+	end
+
+	local window = dispatcher:AddDialog(
 	{
 		ID = script.window_id,
 		WindowTitle = script.name,
-		WindowFlags =
-		{
-			Dialog = true,
-			WindowTitleHint = true,
-			WindowCloseButtonHint = true,
-		},
-
-		WindowModality = "WindowModal",
+		WindowFlags = window_flags,
+		WindowModality = "ApplicationModal",
 
 		Events = 
 		{
@@ -239,7 +255,11 @@ local function create_window()
 			{
 				Weight = 0,
 
-				ui:HGap(0, 1),
+				ui:Label
+				{
+					Weight = 1,
+					ID = "Playhead",
+				},
 
 				ui:Button
 				{
@@ -256,7 +276,7 @@ local function create_window()
 
 	window.On.TimelinesTreeView.ItemDoubleClicked = function(ev)
 		-- Exit the UI loop and return the index of the clicked timeline
-		dispatcher:ExitLoop(ev.item:GetData(0, "UserRole"))
+		dispatcher:ExitLoop(ev.item:GetData(0, "DisplayRole"))
 	end
 
 	window.On.CloseButton.Clicked = function(ev)
@@ -280,10 +300,17 @@ end
 local function main()
 	local project = assert(resolve:GetProjectManager():GetCurrentProject(), "Couldn't get current project")
 	local current_timeline = assert(project:GetCurrentTimeline(), "Couldn't get current timeline")
+	local current_frame_rate = luaresolve.frame_rates:get_decimal(current_timeline:GetSetting("timelineFrameRate"))
+	local current_timecode = current_timeline:GetCurrentTimecode()
+	local current_frame = luaresolve:frame_from_timecode(current_timecode, current_frame_rate)
 	local timeline_count = project:GetTimelineCount()
 	local window, window_items = create_window()
 
-	window_items.TimelinesTreeView.ColumnCount = 5
+	window_items.TimelinesTreeView.ColumnCount = 6
+	window_items.TimelinesTreeView.ColumnWidth[0] = 35
+	window_items.TimelinesTreeView.ColumnWidth[1] = 180
+	window_items.TimelinesTreeView.ColumnWidth[2] = 70
+	window_items.TimelinesTreeView.ColumnWidth[3] = 80
 
 	for i = 1, timeline_count do
 		local timeline = project:GetTimelineByIndex(i)
@@ -292,12 +319,17 @@ local function main()
 		local frame_rate = luaresolve.frame_rates:get_decimal(timeline:GetSetting("timelineFrameRate"))
 		local drop_frame = timeline:GetSetting("timelineDropFrameTimecode") == "1"
 
-		item.Text[0] = timeline:GetName()
-		item.Text[1] = tostring(frames)
-		item.Text[2] = string.format("%.3f%s", frame_rate, iif(drop_frame, " DF", ""))
-		item.Text[3] = luaresolve:timecode_from_frame(frames, frame_rate, drop_frame)
-		item.Text[4] = luaresolve:time_from_frame(frames, frame_rate).time
-		item:SetData(0, "UserRole", i) -- Store the index of the timeline in the data for column 0
+		item:SetData(0, "DisplayRole", i) -- We're using SetData instead of Text so we can get the natural sort order of numbers
+		item:SetData(1, "DisplayRole", timeline:GetName())
+		item:SetData(2, "DisplayRole", frames)
+		item:SetData(3, "DisplayRole", string.format("%.3f%s", frame_rate, iif(drop_frame, " DF", ""))) -- If you want to sort 100fps and above correctly, add leading zeros using the string format "%07.3f%s", or don't convert this column to a string and use a separate column for indicating drop frame
+		item:SetData(4, "DisplayRole", luaresolve:timecode_from_frame(frames, frame_rate, drop_frame))
+		item:SetData(5, "DisplayRole", luaresolve:time_from_frame(frames, frame_rate).time)
+
+		-- Change the text color when using a fractional frame rate
+		if frame_rate % 1 > 0 then
+			item.TextColor[5] = { R = 0.831, G = 0.678, B = 0.122, A = 1 }
+		end
 
 		window_items.TimelinesTreeView:AddTopLevelItem(item)
 
@@ -306,8 +338,16 @@ local function main()
 		end
 	end
 
-	window_items.TimelinesTreeView:SetHeaderLabels( { "Name", "Frames", "FPS", "Duration (TC)", "Duration (Time)" } )
-	window_items.TimelinesTreeView:SortByColumn(0, "AscendingOrder")
+	window_items.TimelinesTreeView:SetHeaderLabels( { "ID", "Name", "Frames", "FPS", "Duration (TC)", "Duration (Time)" } )
+	window_items.TimelinesTreeView:SortByColumn(1, "AscendingOrder")
+
+	window_items.Playhead.Text = string.format("<pre>Current Frame: <span style='color: white'>%s</span>   TC: <span style='color: white;'>%s</span>   Time: <span style='%s'>%s</span></pre>",
+		current_frame,
+		current_timecode,
+		iif(current_frame_rate % 1 > 0, "color: rgb(212, 173, 31);", "color: white;"),
+		luaresolve:time_from_frame(current_frame - current_timeline:GetStartFrame(), current_frame_rate).time
+	)
+
 	window:Show()
 	
 	-- Run the UI loop where it will wait for events

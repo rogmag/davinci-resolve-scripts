@@ -27,9 +27,15 @@ SOFTWARE.
 
 	DaVinci Resolve comes with binaries for libavcodec, libavformat and libavutil.
 
-	This script is an example of how we can take advantage of having those libraries available to LuaJIT.
+	This script is an example of how we can take advantage of having those libraries available to
+	LuaJIT. Specifically we'll use av_timecode_make_string() and av_timecode_init_from_string() to
+	create and parse timecode.
+
+	Be aware that DaVinci Resolve currently comes with libavutil-56, which creates incorrect timecode
+	for 119.88fps drop frame (or any frame rate with drop frame above 59.94fps).
 
 	roger.magnusson@gmail.com
+
 
 ]]
 
