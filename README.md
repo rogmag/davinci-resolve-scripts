@@ -1,6 +1,7 @@
 # DaVinci Resolve Scripts
 
 These scripts are from a series of posts I made on the Blackmagic Design DaVinci Resolve user forum.
+[Creating DaVinci Resolve Scripts](https://forum.blackmagicdesign.com/viewtopic.php?f=21&t=175315)
 
 ## Scripts/Utility/Timelines with Custom Settings
 
@@ -11,6 +12,7 @@ one to find them all.
 
 This script lists the timelines that have the "Use Project Settings" checkbox unchecked.
 Double click a timeline to switch to it.
+![Timelines with Custom Settings](https://rogmag.github.io/images/timelines_with_custom_settings.png)
 
 ## Scripts/Utility/Libavutil
 
@@ -37,12 +39,14 @@ a script is running, the script will also fail.
 Many functions in the Resolve API can return a status so you can check if it succeeded or not, but I
 think what we really need is a way to lock the GUI and for backups to be postponed while running. Just
 like what happens when you're rendering a file.
+![Grab Stills at Markers](https://rogmag.github.io/images/grab_stills_at_markers.png)
 
 ## Scripts/Utility/Timeline Duration
 
 A script that shows the duration of all timelines in a project using frames, timecode and real time.
 This is useful for learning the real duration of a timeline when using a fractional frame rate, as it 
 doesn't correspond exactly to its timecode.
+![Timeline Duration](https://rogmag.github.io/images/timeline_duration.png)
 
 ## Scripts in Development
 
