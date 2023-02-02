@@ -48,6 +48,13 @@ This is useful for learning the real duration of a timeline when using a fractio
 doesn't correspond exactly to its timecode.
 ![Timeline Duration](https://rogmag.github.io/images/timeline_duration.png)
 
+## Scripts/Utility/Change Timeline Marker Colors
+
+This script performs batch color changes of timeline markers. It does that by removing and recreating
+markers with your selected color. You can use specific colors, random or cycle through all available
+colors in order.
+![Timeline Duration](https://rogmag.github.io/images/change_timeline_marker_colors.png)
+
 ## Scripts in Development
 
 * Scripts/Utility/Render Clips by Guide Track
