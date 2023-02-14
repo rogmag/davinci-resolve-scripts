@@ -25,9 +25,7 @@ SOFTWARE.
 -----------------------------------------------------------------------------
 
 
-	Known issues: On the Edit page, if the Index > Marker tab (or Tracks tab) is open, navigating
-	to a marker by double clicking a marker in the tree view becomes unreliable and the playhead
-	doesn't always move to the correct position.
+	A script for exporting timeline markers to various formats.
 
 	roger.magnusson@gmail.com
 
@@ -47,6 +45,7 @@ script =
 	{
 		folder = "",
 		format = "tab_delimited_text",
+		force_start_at_zero = false,
 		color = "Any",
 	},
 
@@ -246,6 +245,7 @@ luaresolve =
 			{
 				name = "YouTube Chapters",
 				extension = "txt",
+				always_start_at_zero = true,
 			},
 
 			fairlight =
@@ -402,7 +402,7 @@ libavutil =
 script.set_declarations()
 script:load_settings()
 
-local function create_window(timeline, timeline_start, frame_rate, drop_frame)
+local function create_window(timeline, frame_rate, drop_frame)
 	local ui = script.ui
 	local dispatcher = script.dispatcher
 
@@ -492,13 +492,32 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 							}
 						]],
 					},
-				},
 
-				ui:HGap(10),
+					ui:HGap(10),
+				},
 
 				ui:HGroup
 				{
 					Weight = 0,
+					ID = "CheckBoxControls",
+					Spacing = 10,
+				
+					ui:CheckBox
+					{
+						Weight = 0,
+						ID = "ForceZeroCheckBox",
+						Text = "Force start at zero",
+						Events = { Toggled = true },
+						Checked = script.settings.force_start_at_zero,
+						ToolTip = "Override the timeline start timecode and export as if it started at zero.",
+					},
+
+					ui:HGap(10),
+				},
+
+				ui:HGroup
+				{
+					Weight = 1,
 					Spacing = 10,
 				
 					ui:Label
@@ -512,7 +531,7 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 				
 					ui:ComboBox
 					{
-						Weight = 1,
+						Weight = 0,
 						ID = "ColorComboBox",
 						FocusPolicy = { StrongFocus = true },
 						StyleSheet = [[
@@ -567,6 +586,8 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 
 	window_items = window:GetItems()
 
+	local start_frame = timeline:GetStartFrame()
+
 	-- All markers
 	local markers = {}
 
@@ -582,11 +603,15 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 		local marker_count = marker_count_by_color[window_items.ColorComboBox.CurrentText]
 		window_items.ExportButton.Enabled = marker_count ~= nil and marker_count > 0
 
+		local selected_format = luaresolve.markers.formats.sort_order[window_items.FormatComboBox.CurrentIndex + 1]
+		window_items.CheckBoxControls.Hidden = start_frame == 0 or luaresolve.markers.formats[selected_format].always_start_at_zero == true
+
 		-- Clear marker_table and the tree
 		marker_table = {}
 		window_items.MarkersTreeView.UpdatesEnabled = false
 		window_items.MarkersTreeView:Clear()
 
+		local timeline_start = iif(window_items.ForceZeroCheckBox.Checked or window_items.CheckBoxControls.Hidden, 0, start_frame)
 		local count = 0
 
 		for _, frame in ipairs(marker_frames) do
@@ -600,7 +625,7 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 				local data = 
 				{
 					index = count,
-					frame = frame,
+					frame = timeline_start + frame,
 					name = marker.name,
 					start_tc = luaresolve:timecode_from_frame(timeline_start + frame, frame_rate, drop_frame),
 					end_tc = luaresolve:timecode_from_frame(timeline_start + frame + marker.duration, frame_rate, drop_frame),
@@ -636,6 +661,8 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 		window_items.MarkersTreeView:SetHeaderLabels( { "#", "Frame", "Name", "Start TC", "End TC", "Duration (TC)", "Duration (Time)", "Color", "Notes" } )
 		window_items.MarkersTreeView:SortByColumn(0, "AscendingOrder")
 		window_items.MarkersTreeView.UpdatesEnabled = true
+
+		window:RecalcLayout()
 	end
 
 	local function initialize_controls()
@@ -682,6 +709,14 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 
 	initialize_controls()
 
+	window.On.FormatComboBox.CurrentIndexChanged = function(ev)
+		update_controls()
+	end
+
+	window.On.ForceZeroCheckBox.Toggled = function(ev)
+		update_controls()
+	end
+
 	window.On.ColorComboBox.CurrentIndexChanged = function(ev)
 		update_controls()
 	end
@@ -691,7 +726,7 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 		dispatcher:ExitLoop
 		{
 			action = "gotomarker",
-			frame = ev.item:GetData(1, "DisplayRole")
+			frame = ev.item:GetData(1, "DisplayRole") + iif(window_items.ForceZeroCheckBox.Checked or window_items.CheckBoxControls.Hidden, start_frame, 0)
 		}
 	end
 
@@ -707,6 +742,7 @@ local function create_window(timeline, timeline_start, frame_rate, drop_frame)
 
 		if filename then
 			script.settings.format = format
+			script.settings.force_start_at_zero = window_items.ForceZeroCheckBox.Checked
 			script.settings.color = window_items.ColorComboBox.CurrentText
 			script.settings.folder = ( { splitpath(filename) } )[1]
 			script:save_settings()
@@ -736,10 +772,9 @@ end
 local function main()
 	local project = assert(resolve:GetProjectManager():GetCurrentProject(), "Couldn't get current project")
 	local timeline = assert(project:GetCurrentTimeline(), "Couldn't get current timeline")
-	local timeline_start = timeline:GetStartFrame()
 	local frame_rate = luaresolve.frame_rates:get_decimal(timeline:GetSetting("timelineFrameRate"))
 	local drop_frame = timeline:GetSetting("timelineDropFrameTimecode") == "1"
-	local window, window_items = create_window(timeline, timeline_start, frame_rate, drop_frame)
+	local window, window_items = create_window(timeline, frame_rate, drop_frame)
 
 	window:Show()
 	
@@ -824,8 +859,8 @@ local function main()
 				end
 
 				for index, marker_data in ipairs(marker_table) do
-					local start_time = luaresolve:time_from_frame(timeline_start + marker_data.frame, frame_rate).time
-					local end_time = luaresolve:time_from_frame(timeline_start + marker_data.frame + marker_data.duration_frames, frame_rate).time
+					local start_time = luaresolve:time_from_frame(marker_data.frame, frame_rate).time
+					local end_time = luaresolve:time_from_frame(marker_data.frame + marker_data.duration_frames, frame_rate).time
 
 					if format == "srt" then
 						start_time = start_time:gsub("%.", ",")
