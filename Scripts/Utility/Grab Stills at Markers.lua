@@ -265,20 +265,31 @@ libavutil =
 {
 	library = luaresolve.load_library(iif(ffi.os == "Windows", "avutil*.dll", iif(ffi.os == "OSX", "libavutil*.dylib", "libavutil.so"))),
 
+	demand_version = function(self, version)
+		local library_version = self:av_version_info()
+
+		return (library_version.major > version.major)
+			or (library_version.major == version.major and library_version.minor > version.minor)
+			or (library_version.major == version.major and library_version.minor == version.minor and library_version.patch > version.patch)
+			or (library_version.major == version.major and library_version.minor == version.minor and library_version.patch == version.patch)
+	end,
+
 	set_declarations = function()
 		ffi.cdef[[
-		enum AVTimecodeFlag {
-			AV_TIMECODE_FLAG_DROPFRAME      = 1<<0, // timecode is drop frame
-			AV_TIMECODE_FLAG_24HOURSMAX     = 1<<1, // timecode wraps after 24 hours
-			AV_TIMECODE_FLAG_ALLOWNEGATIVE  = 1<<2, // negative time values are allowed
-		};
+			enum AVTimecodeFlag {
+				AV_TIMECODE_FLAG_DROPFRAME      = 1<<0, // timecode is drop frame
+				AV_TIMECODE_FLAG_24HOURSMAX     = 1<<1, // timecode wraps after 24 hours
+				AV_TIMECODE_FLAG_ALLOWNEGATIVE  = 1<<2, // negative time values are allowed
+			};
 
-		struct AVRational { int32_t num; int32_t den; };
-		struct AVTimecode { int32_t start; enum AVTimecodeFlag flags; struct AVRational rate; uint32_t fps; };
+			struct AVRational { int32_t num; int32_t den; };
+			struct AVTimecode { int32_t start; enum AVTimecodeFlag flags; struct AVRational rate; uint32_t fps; };
 
-		char* av_timecode_make_string(const struct AVTimecode* tc, const char* buf, int32_t framenum);
-		int32_t av_timecode_init_from_string(struct AVTimecode* tc, struct AVRational rate, const char* str, void* log_ctx);
-	]]
+			char* av_timecode_make_string(const struct AVTimecode* tc, const char* buf, int32_t framenum);
+			int32_t av_timecode_init_from_string(struct AVTimecode* tc, struct AVRational rate, const char* str, void* log_ctx);
+
+			char* av_version_info (void);
+		]]
 	end,
 
 	av_timecode_make_string = function(self, start, frame, fps, flags)
@@ -302,10 +313,24 @@ libavutil =
 			flags = bor_number_flags("enum AVTimecodeFlag", flags),
 			fps = math.ceil(luaresolve.frame_rates:get_decimal(fps))
 		})
-	
+
+		if (flags.AV_TIMECODE_FLAG_DROPFRAME and fps > 60 and (fps % (30000 / 1001) == 0 or fps % 29.97 == 0))
+			and (not self:demand_version( { major = 4, minor = 4, patch = 0 } ))
+		then
+			-- Adjust for drop frame above 60 fps (not necessary if BMD upgrades to libavutil-57 or later)
+			frame = frame + 9 * tc.fps / 15 * (math.floor(frame / (tc.fps * 599.4))) + (math.floor((frame % (tc.fps * 599.4)) / (tc.fps * 59.94))) * tc.fps / 15
+		end
+
 		local timecodestring = ffi.string(self.library.av_timecode_make_string(tc, ffi.string(string.rep(" ", 16)), frame))
 	
 		if (#timecodestring > 0) then
+			local frame_digits = #tostring(math.ceil(fps) - 1)
+
+			-- Fix for libavutil where it doesn't use leading zeros for timecode at frame rates above 100
+			if frame_digits > 2 then
+				timecodestring = string.format("%s%0"..frame_digits.."d", timecodestring:sub(1, timecodestring:find("[:;]%d+$")), tonumber(timecodestring:match("%d+$")))
+			end
+
 			return timecodestring
 		else
 			return nil
@@ -336,7 +361,18 @@ libavutil =
 		else
 			error("avutil error code: "..result)
 		end
-	end
+	end,
+
+	av_version_info = function(self)
+		local version = ffi.string(self.library.av_version_info())
+
+		return 
+		{
+			major = tonumber(version:match("^%d+")),
+			minor = tonumber(version:match("%.%d+"):sub(2)),
+			patch = tonumber(version:match("%d+$"))
+		}
+	end,
 }
 
 script.set_declarations()
@@ -489,6 +525,7 @@ local function create_window(marker_count_by_color, still_album_name)
 						Weight = 0,
 						ID = "BrowseButton",
 						Text = "Browse",
+						AutoDefault = false,
 					},
 				},
 
@@ -537,6 +574,7 @@ local function create_window(marker_count_by_color, still_album_name)
 					Weight = 0,
 					ID = "CancelButton",
 					Text = "Cancel",
+					AutoDefault = false,
 				},
 
 				ui:Button
@@ -544,6 +582,7 @@ local function create_window(marker_count_by_color, still_album_name)
 					Weight = 0,
 					ID = "StartButton",
 					Text = "Start",
+					AutoDefault = false,
 					Default = true,
 				},
 			},
@@ -689,7 +728,21 @@ local function main()
 			-- Note: The script will stop if an automated backup starts, or if the user does something in Resolve like opening Preferences or Project Settings.
 			--       Resolve currently has no way of locking the user interface while running a script and we can't move the playhead if we have a modal window showing.
 
-			for marker_frame, marker in pairs(markers) do
+			-- Create a new table that will contain ordered marker frames
+			local marker_frames = {}
+			
+			-- Add the marker frames to the table
+			for marker_frame, _ in pairs(markers) do
+				marker_frames[#marker_frames+1] = marker_frame
+			end
+			
+			-- Sort the table
+			table.sort(marker_frames)
+
+			-- Now we can process the markers in order
+			for _, marker_frame in ipairs(marker_frames) do
+				local marker = markers[marker_frame]
+
 				if script.settings.markers == "Any" or script.settings.markers == marker.color then
 					local frame = timeline_start + marker_frame
 					local timecode = luaresolve:timecode_from_frame(frame, frame_rate, drop_frame)

@@ -31,9 +31,6 @@ SOFTWARE.
 	LuaJIT. Specifically we'll use av_timecode_make_string() and av_timecode_init_from_string() to
 	create and parse timecode.
 
-	Be aware that DaVinci Resolve currently comes with libavutil-56, which creates incorrect timecode
-	for 119.88fps drop frame (or any frame rate with drop frame above 59.94fps).
-
 	roger.magnusson@gmail.com
 
 
@@ -97,20 +94,31 @@ libavutil =
 {
 	library = luaresolve.load_library(iif(ffi.os == "Windows", "avutil*.dll", iif(ffi.os == "OSX", "libavutil*.dylib", "libavutil.so"))),
 
+	demand_version = function(self, version)
+		local library_version = self:av_version_info()
+
+		return (library_version.major > version.major)
+			or (library_version.major == version.major and library_version.minor > version.minor)
+			or (library_version.major == version.major and library_version.minor == version.minor and library_version.patch > version.patch)
+			or (library_version.major == version.major and library_version.minor == version.minor and library_version.patch == version.patch)
+	end,
+
 	set_declarations = function()
 		ffi.cdef[[
-		enum AVTimecodeFlag {
-			AV_TIMECODE_FLAG_DROPFRAME      = 1<<0, // timecode is drop frame
-			AV_TIMECODE_FLAG_24HOURSMAX     = 1<<1, // timecode wraps after 24 hours
-			AV_TIMECODE_FLAG_ALLOWNEGATIVE  = 1<<2, // negative time values are allowed
-		};
+			enum AVTimecodeFlag {
+				AV_TIMECODE_FLAG_DROPFRAME      = 1<<0, // timecode is drop frame
+				AV_TIMECODE_FLAG_24HOURSMAX     = 1<<1, // timecode wraps after 24 hours
+				AV_TIMECODE_FLAG_ALLOWNEGATIVE  = 1<<2, // negative time values are allowed
+			};
 
-		struct AVRational { int32_t num; int32_t den; };
-		struct AVTimecode { int32_t start; enum AVTimecodeFlag flags; struct AVRational rate; uint32_t fps; };
+			struct AVRational { int32_t num; int32_t den; };
+			struct AVTimecode { int32_t start; enum AVTimecodeFlag flags; struct AVRational rate; uint32_t fps; };
 
-		char* av_timecode_make_string(const struct AVTimecode* tc, const char* buf, int32_t framenum);
-		int32_t av_timecode_init_from_string(struct AVTimecode* tc, struct AVRational rate, const char* str, void* log_ctx);
-	]]
+			char* av_timecode_make_string(const struct AVTimecode* tc, const char* buf, int32_t framenum);
+			int32_t av_timecode_init_from_string(struct AVTimecode* tc, struct AVRational rate, const char* str, void* log_ctx);
+
+			char* av_version_info (void);
+		]]
 	end,
 
 	av_timecode_make_string = function(self, start, frame, fps, flags)
@@ -134,10 +142,24 @@ libavutil =
 			flags = bor_number_flags("enum AVTimecodeFlag", flags),
 			fps = math.ceil(luaresolve.frame_rates:get_decimal(fps))
 		})
-	
+
+		if (flags.AV_TIMECODE_FLAG_DROPFRAME and fps > 60 and (fps % (30000 / 1001) == 0 or fps % 29.97 == 0))
+			and (not self:demand_version( { major = 4, minor = 4, patch = 0 } ))
+		then
+			-- Adjust for drop frame above 60 fps (not necessary if BMD upgrades to libavutil-57 or later)
+			frame = frame + 9 * tc.fps / 15 * (math.floor(frame / (tc.fps * 599.4))) + (math.floor((frame % (tc.fps * 599.4)) / (tc.fps * 59.94))) * tc.fps / 15
+		end
+
 		local timecodestring = ffi.string(self.library.av_timecode_make_string(tc, ffi.string(string.rep(" ", 16)), frame))
 	
 		if (#timecodestring > 0) then
+			local frame_digits = #tostring(math.ceil(fps) - 1)
+
+			-- Fix for libavutil where it doesn't use leading zeros for timecode at frame rates above 100
+			if frame_digits > 2 then
+				timecodestring = string.format("%s%0"..frame_digits.."d", timecodestring:sub(1, timecodestring:find("[:;]%d+$")), tonumber(timecodestring:match("%d+$")))
+			end
+
 			return timecodestring
 		else
 			return nil
@@ -168,7 +190,18 @@ libavutil =
 		else
 			error("avutil error code: "..result)
 		end
-	end
+	end,
+
+	av_version_info = function(self)
+		local version = ffi.string(self.library.av_version_info())
+
+		return 
+		{
+			major = tonumber(version:match("^%d+")),
+			minor = tonumber(version:match("%.%d+"):sub(2)),
+			patch = tonumber(version:match("%d+$"))
+		}
+	end,
 }
 
 libavutil.set_declarations()

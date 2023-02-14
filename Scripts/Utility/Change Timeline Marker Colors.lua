@@ -29,6 +29,9 @@ SOFTWARE.
 	recreating markers with your selected color. You can use specific colors, random or cycle
 	through all available colors in order.
 
+	Note that Resolve 18 doesn't support adding keywords to markers through the API. This means
+	that any changed markers will have their keywords removed.
+
 	roger.magnusson@gmail.com
 
 
@@ -151,6 +154,8 @@ local function create_window(marker_count_by_color)
 		ui:VGroup
 		{
 			Weight = 1,
+			MinimumSize = { 380, 130 },
+			MaximumSize = { 380, 130 },
 
 			ui:VGap(0, 1),
 
@@ -230,6 +235,7 @@ local function create_window(marker_count_by_color)
 					Weight = 0,
 					ID = "CancelButton",
 					Text = "Cancel",
+					AutoDefault = false,
 				},
 
 				ui:Button
@@ -237,6 +243,7 @@ local function create_window(marker_count_by_color)
 					Weight = 0,
 					ID = "StartButton",
 					Text = "Start",
+					AutoDefault = false,
 					Default = true,
 				},
 			},
@@ -305,12 +312,6 @@ local function create_window(marker_count_by_color)
 		dispatcher:ExitLoop(true)
 	end
 	
-	window.On[script.window_id].KeyPress = function(ev)
-		if (ev.Key == 16777216) then -- Escape
-			window_items.CancelButton:Click()
-		end
-	end
-
 	window.On[script.window_id].Close = function(ev)
 		window_items.CancelButton:Click()
 	end

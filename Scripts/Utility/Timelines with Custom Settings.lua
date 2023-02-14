@@ -91,6 +91,7 @@ local function create_window()
 		ui:VGroup
 		{
 			Weight = 1,
+			Spacing = 10,
 
 			ui:Tree
 			{
@@ -117,6 +118,7 @@ local function create_window()
 					Weight = 0,
 					ID = "CloseButton",
 					Text = "Close",
+					AutoDefault = false,
 					Default = true,
 				},
 			},
