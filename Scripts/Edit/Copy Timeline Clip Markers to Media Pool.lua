@@ -35,9 +35,7 @@ SOFTWARE.
 
 ]]
 
-local script, luaresolve
-
-script = 
+local script = 
 {
 	filename = debug.getinfo(1,"S").source:match("^.*%@(.*)"),
 	version = "1.0",
