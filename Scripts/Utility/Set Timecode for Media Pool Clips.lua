@@ -25,11 +25,7 @@ SOFTWARE.
 -----------------------------------------------------------------------------
 
 
-	Blah, blah. Since there's no Folder.GetParent() function in the API, traversing the hierarchy of bins 
-	isn't very efficient. Luckily it's pretty fast so it's not a big deal.
-
-
-	Known issues: It's just cosmetic, but Folder.GetSubFolderList() doesn't adhere to the sort order set by the user. 
+	A script that can set the timecode of clips in a bin, optionally including sub bins.
 
 	roger.magnusson@gmail.com
 
