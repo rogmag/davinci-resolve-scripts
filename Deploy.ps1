@@ -55,4 +55,10 @@ function Deploy-Files
 }
 
 #Deploy-Files -Source ("{0}Modules/Lua/*" -f $ProjectPath) -Destination "$resolveFusion/Modules/Lua/"
+Deploy-Files -Source ("{0}Fuses/*" -f $ProjectPath) -Destination "$resolveFusion/Fuses/"
 Deploy-Files -Source ("{0}Scripts/*" -f $ProjectPath) -Destination "$resolveFusion/Scripts/"
+
+foreach ($file in (Get-ChildItem "$resolveFusion/Fuses/" -Recurse -Include *.lua ))
+{
+	Rename-Item -Path $file -NewName ("{0}.fuse" -f $file.Basename)
+}
