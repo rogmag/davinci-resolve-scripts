@@ -650,7 +650,11 @@ script =
 						if script.settings.mode == script.constants.MODE.OFFSET_FRAMES then
 							return string.format("Timecode was set to %s frame%s on %s of %s media pool clips", iif(script.settings.offset_frames < 0, tostring(script.settings.offset_frames), "+"..tostring(script.settings.offset_frames)), iif(script.settings.offset_frames == 1, "", "s"), log.updated_items, log.total_item_count)
 						else
-							return string.format("Timecode was set to %s on %s of %s media pool clips", script.settings.timecode, log.updated_items, log.total_item_count)
+							if script.settings.mode == script.constants.MODE.SET_TIMECODE and script.settings.use_date_created then
+								return string.format("Timecode was set to \"Date Created\" on %s of %s media pool clips", log.updated_items, log.total_item_count)
+							else
+								return string.format("Timecode was set to %s on %s of %s media pool clips", script.settings.timecode, log.updated_items, log.total_item_count)
+							end
 						end
 					else
 						return "Timecode was not set on any media pool clips"
