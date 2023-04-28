@@ -1889,7 +1889,7 @@ local function set_timecode_for_media_pool_clips(folder)
 	elseif script.settings.mode == script.constants.MODE.OFFSET_FRAMES then
 		progress_header = string.format("Setting Timecode to %s frame%s", iif(script.settings.offset_frames < 0, tostring(script.settings.offset_frames), "+"..tostring(script.settings.offset_frames)), iif(script.settings.offset_frames == 1, "", "s"))
 	elseif script.settings.mode == script.constants.MODE.SET_TIMECODE and script.settings.use_date_created then
-		progress_header = "Setting Timecode to Date Created"
+		progress_header = "Setting Timecode to \"Date Created\" Metadata"
 	else
 		progress_header = string.format("Setting Timecode to %s", script.settings.timecode)
 	end
